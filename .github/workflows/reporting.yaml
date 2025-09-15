@@ -234,7 +234,7 @@ jobs:
           egress-policy: 'audit'
 
       - name: "Download all analysis results"
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           pattern: analysis-results-*
           path: ./results
