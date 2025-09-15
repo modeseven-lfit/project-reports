@@ -1,0 +1,270 @@
+---
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2025 The Linux Foundation
+
+name: "📊 Project Reports"
+
+# yamllint disable-line rule:truthy
+on:
+  workflow_dispatch:
+  schedule:
+    # Run every Monday at 7:00 AM UTC
+    - cron: '0 7 * * 1'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  verify:
+    name: "Verify Configuration"
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.parse-projects.outputs.matrix }}
+    steps:
+      # Harden the runner used by this workflow
+      # yamllint disable-line rule:line-length
+      - uses: step-security/harden-runner@ec9f2d5744a09debf3a187a3f4f675c53b671911 # v2.13.0
+        with:
+          egress-policy: 'audit'
+
+      - name: "Checkout repository"
+        # yamllint disable-line rule:line-length
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: "Verify PROJECTS_JSON variable content"
+        shell: bash
+        run: |
+          if [ -z "${{ vars.PROJECTS_JSON }}" ]; then
+            echo "::error::PROJECTS_JSON variable is not set"
+            exit 1
+          fi
+
+          echo "PROJECTS_JSON variable exists"
+          echo "Raw content: ${{ vars.PROJECTS_JSON }}"
+
+      - name: "Parse and validate JSON structure"
+        id: parse-projects
+        shell: bash
+        run: |
+          # Parse PROJECTS_JSON and verify structure
+          projects_json='${{ vars.PROJECTS_JSON }}'
+
+          # Validate JSON syntax
+          if ! echo "$projects_json" | jq . > /dev/null 2>&1; then
+            echo "::error::PROJECTS_JSON contains invalid JSON"
+            exit 1
+          fi
+
+          # Validate required fields exist
+          if ! echo "$projects_json" | jq -e 'type == "array"' > /dev/null; then
+            echo "::error::PROJECTS_JSON must be an array"
+            exit 1
+          fi
+
+          # Check each project has required fields
+          if ! echo "$projects_json" | \
+            jq -e 'all(.project and .server)' > /dev/null; then
+            echo "::error::Each project must have 'project' and 'server' fields"
+            exit 1
+          fi
+
+          # Count projects
+          project_count=$(echo "$projects_json" | jq '. | length')
+          echo "Found $project_count project(s) to process"
+
+          # Create matrix for parallel execution
+          matrix=$(echo "$projects_json" | jq -c '{include: .}')
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "## Configuration Validation ✅"
+            echo "- **Projects found:** $project_count"
+            echo "- **JSON structure:** Valid"
+            echo ""
+            echo "### Projects:"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "$projects_json" | \
+            jq -r '.[] | "- **\(.project):** \(.server)"' >> \
+            "$GITHUB_STEP_SUMMARY"
+
+  analyze:
+    name: "Analyze ${{ matrix.project }}"
+    needs: verify
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.verify.outputs.matrix) }}
+    steps:
+      # Harden the runner used by this workflow
+      # yamllint disable-line rule:line-length
+      - uses: step-security/harden-runner@ec9f2d5744a09debf3a187a3f4f675c53b671911 # v2.13.0
+        with:
+          egress-policy: 'audit'
+
+      - name: "Checkout repository"
+        # yamllint disable-line rule:line-length
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: "Clone Gerrit repositories for ${{ matrix.project }}"
+        # Temporarily use fork until merged upstream
+        uses: modeseven-lfreleng-actions/gerrit-clone-action@initial-update
+        # uses: lfit/gerrit-clone-action@main
+        id: clone
+        with:
+          host: ${{ matrix.server }}
+          path-prefix: "./gerrit-repos"
+          skip-archived: "true"
+          threads: "4"
+          clone-timeout: "300"
+
+      - name: "Analyze cloned repository structure for ${{ matrix.project }}"
+        shell: bash
+        run: |
+          project="${{ matrix.project }}"
+          echo "📁 Analyzing cloned repository structure for $project"
+          echo "## 📁 Repository Structure Analysis for $project" >> \
+            "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          # Check if the gerrit-repos directory exists
+          if [ -d "./gerrit-repos" ]; then
+            echo "🔍 Listing repository structure:"
+
+            # Show top-level directory structure
+            {
+              echo "### Directory Structure:"
+              echo '```'
+              find ./gerrit-repos -maxdepth 2 -type d | head -20 | sort
+              echo '```'
+              echo ""
+            } >> "$GITHUB_STEP_SUMMARY"
+
+            # Calculate and display disk usage
+            echo -e "### 💾 Disk Usage Analysis:\n" >> "$GITHUB_STEP_SUMMARY"
+
+            # Overall size
+            total_size=$(du -sh ./gerrit-repos | cut -f1)
+            echo "📊 Total downloaded data: $total_size"
+
+            # Count repositories
+            repo_count=$(find ./gerrit-repos -maxdepth 1 -type d \
+              -not -name "gerrit-repos" | wc -l)
+            echo "📈 Repository count: $repo_count directories"
+
+            {
+              echo "📊 **Total downloaded data:** $total_size"
+              echo "📈 **Repository count:** $repo_count directories"
+            } >> "$GITHUB_STEP_SUMMARY"
+
+            # Show largest repositories (top 10)
+            {
+              echo ""
+              echo "#### 🏆 Largest Repositories:"
+              echo '```'
+              du -sh ./gerrit-repos/* 2>/dev/null | sort -hr | head -10
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+
+            # Show directory structure summary
+            # Count different types of content
+            total_dirs=$(find ./gerrit-repos -type d | wc -l)
+            total_files=$(find ./gerrit-repos -type f | wc -l)
+            repo_size_mb=$(du -sm ./gerrit-repos | cut -f1)
+            avg_size=$(echo "scale=2; $repo_size_mb / $repo_count" | \
+              bc 2>/dev/null || echo "N/A")
+
+            {
+              echo ""
+              echo "#### 📋 Summary Statistics:"
+              echo "- **Total directories:** $total_dirs"
+              echo "- **Total files:** $total_files"
+              echo "- **Average size per repository:** ${avg_size}MB"
+              echo ""
+            } >> "$GITHUB_STEP_SUMMARY"
+
+            echo "✅ Repository structure analysis completed"
+          else
+            echo "❌ gerrit-repos directory not found"
+            echo "- **Status:** ❌ No repository data found" >> \
+              "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: "Run analytics for ${{ matrix.project }}"
+        shell: bash
+        run: |
+          # Execute the analytics script
+          python3 ./scripts/analyze-repos.py \
+            --project "${{ matrix.project }}" \
+            --server "${{ matrix.server }}" \
+            --repos-path "./gerrit-repos"
+
+      - name: "Upload analysis results"
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: analysis-results-${{ matrix.project }}
+          path: |
+            ./gerrit-repos/clone-manifest.json
+            ./analysis-output-${{ matrix.project }}.json
+          retention-days: 30
+          if-no-files-found: warn
+
+  summary:
+    name: "Generate Summary Report"
+    needs: [verify, analyze]
+    if: always()
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    timeout-minutes: 10
+    steps:
+      # Harden the runner used by this workflow
+      # yamllint disable-line rule:line-length
+      - uses: step-security/harden-runner@ec9f2d5744a09debf3a187a3f4f675c53b671911 # v2.13.0
+        with:
+          egress-policy: 'audit'
+
+      - name: "Download all analysis results"
+        uses: actions/download-artifact@v4
+        with:
+          pattern: analysis-results-*
+          path: ./results
+
+      - name: "Generate workflow summary"
+        shell: bash
+        run: |
+          {
+            echo "## 📊 Project Reports Summary"
+            echo ""
+            echo "**Workflow completed:** $(date -u)"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # Count results
+          result_count=$(find ./results -name "analysis-results-*" \
+            -type d | wc -l)
+          {
+            echo "**Analysis results:** $result_count project(s) processed"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # List processed projects
+          if [ -d "./results" ]; then
+            echo "### Processed Projects:" >> "$GITHUB_STEP_SUMMARY"
+            for result_dir in ./results/analysis-results-*; do
+              if [ -d "$result_dir" ]; then
+                project_name=$(basename "$result_dir" | \
+                  sed 's/analysis-results-//')
+                echo "- ✅ $project_name" >> "$GITHUB_STEP_SUMMARY"
+              fi
+            done
+          fi
