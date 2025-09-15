@@ -1,0 +1,16 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: project-reports
+Upstream-Contact: The Linux Foundation <info@linuxfoundation.org>
+Source: https://github.com/lfit/project-reports
+
+Files: .markdownlint.json
+Copyright: 2025 The Linux Foundation
+License: Apache-2.0
+
+Files: .editorconfig .gitignore .yamllint .gitlint
+Copyright: 2025 The Linux Foundation
+License: Apache-2.0
+
+Files: .pre-commit-config.yaml .readthedocs.yml
+Copyright: 2025 The Linux Foundation
+License: Apache-2.0
