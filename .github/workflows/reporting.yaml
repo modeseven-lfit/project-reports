@@ -116,7 +116,7 @@ jobs:
 
       - name: "Clone Gerrit repositories for ${{ matrix.project }}"
         # Temporarily use fork until merged upstream
-        uses: modeseven-lfreleng-actions/gerrit-clone-action@initial-update
+        uses: modeseven-lfreleng-actions/gerrit-clone-action@main
         # uses: lfit/gerrit-clone-action@main
         id: clone
         with:
@@ -125,6 +125,7 @@ jobs:
           skip-archived: "true"
           threads: "4"
           clone-timeout: "300"
+          use-https: "true"
 
       - name: "Analyze cloned repository structure for ${{ matrix.project }}"
         shell: bash
@@ -234,7 +235,8 @@ jobs:
           egress-policy: 'audit'
 
       - name: "Download all analysis results"
-        uses: actions/download-artifact@v4
+        # yamllint disable-line rule:line-length
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
         with:
           pattern: analysis-results-*
           path: ./results
