@@ -1,0 +1,658 @@
+{
+  "schema_version": "1.0.0",
+  "generated_at": "2025-09-17T19:21:28.627127+00:00",
+  "project": "debug-test",
+  "config_digest": "7413b9c2d2f052c3521a9f295d15106bcaf23b895be4fb0b123b47629997ab5e",
+  "script_version": "1.0.0",
+  "time_windows": {
+    "last_30_days": {
+      "days": 30,
+      "start": "2025-08-18T19:21:28.627335+00:00",
+      "end": "2025-09-17T19:21:28.627335+00:00",
+      "start_timestamp": 1755544888.627335,
+      "end_timestamp": 1758136888.627335
+    },
+    "last_90_days": {
+      "days": 90,
+      "start": "2025-06-19T19:21:28.627335+00:00",
+      "end": "2025-09-17T19:21:28.627335+00:00",
+      "start_timestamp": 1750360888.627335,
+      "end_timestamp": 1758136888.627335
+    },
+    "last_365_days": {
+      "days": 365,
+      "start": "2024-09-17T19:21:28.627335+00:00",
+      "end": "2025-09-17T19:21:28.627335+00:00",
+      "start_timestamp": 1726600888.627335,
+      "end_timestamp": 1758136888.627335
+    },
+    "last_3_years": {
+      "days": 1095,
+      "start": "2022-09-18T19:21:28.627335+00:00",
+      "end": "2025-09-17T19:21:28.627335+00:00",
+      "start_timestamp": 1663528888.627335,
+      "end_timestamp": 1758136888.627335
+    }
+  },
+  "repositories": [
+    {
+      "name": "sample-repo",
+      "path": "test-repos/sample-repo",
+      "last_commit_timestamp": "2025-09-17T20:12:42+01:00",
+      "days_since_last_commit": 0,
+      "is_active": true,
+      "commit_counts": {
+        "last_30_days": 3,
+        "last_90_days": 3,
+        "last_365_days": 3,
+        "last_3_years": 3
+      },
+      "loc_stats": {
+        "last_30_days": {
+          "added": 371,
+          "removed": 1,
+          "net": 370
+        },
+        "last_90_days": {
+          "added": 371,
+          "removed": 1,
+          "net": 370
+        },
+        "last_365_days": {
+          "added": 371,
+          "removed": 1,
+          "net": 370
+        },
+        "last_3_years": {
+          "added": 371,
+          "removed": 1,
+          "net": 370
+        }
+      },
+      "unique_contributors": {
+        "last_30_days": 2,
+        "last_90_days": 2,
+        "last_365_days": 2,
+        "last_3_years": 2
+      },
+      "features": {
+        "dependabot": {
+          "present": true,
+          "files": [
+            ".github/dependabot.yml"
+          ]
+        },
+        "github2gerrit_workflow": {
+          "present": false,
+          "workflows": []
+        },
+        "pre_commit": {
+          "present": true,
+          "config_file": ".pre-commit-config.yaml",
+          "repos_count": 5
+        },
+        "readthedocs": {
+          "present": true,
+          "config_type": "readthedocs",
+          "config_files": [
+            ".readthedocs.yml"
+          ]
+        },
+        "sonatype_config": {
+          "present": false,
+          "config_files": []
+        },
+        "project_types": {
+          "detected_types": [
+            "python"
+          ],
+          "primary_type": "python",
+          "details": [
+            {
+              "type": "python",
+              "files": [
+                "requirements.txt"
+              ],
+              "confidence": 1
+            }
+          ]
+        },
+        "workflows": {
+          "count": 0,
+          "classified": {
+            "verify": 0,
+            "merge": 0,
+            "other": 0
+          },
+          "files": []
+        }
+      },
+      "authors": [
+        {
+          "name": "Alice Developer",
+          "email": "alice@example.com",
+          "username": "alice",
+          "commits": {
+            "last_30_days": 1,
+            "last_90_days": 1,
+            "last_365_days": 1,
+            "last_3_years": 1
+          },
+          "lines_added": {
+            "last_30_days": 5,
+            "last_90_days": 5,
+            "last_365_days": 5,
+            "last_3_years": 5
+          },
+          "lines_removed": {
+            "last_30_days": 1,
+            "last_90_days": 1,
+            "last_365_days": 1,
+            "last_3_years": 1
+          },
+          "lines_net": {
+            "last_30_days": 4,
+            "last_90_days": 4,
+            "last_365_days": 4,
+            "last_3_years": 4
+          }
+        },
+        {
+          "name": "Test User",
+          "email": "test@example.com",
+          "username": "test",
+          "commits": {
+            "last_30_days": 2,
+            "last_90_days": 2,
+            "last_365_days": 2,
+            "last_3_years": 2
+          },
+          "lines_added": {
+            "last_30_days": 366,
+            "last_90_days": 366,
+            "last_365_days": 366,
+            "last_3_years": 366
+          },
+          "lines_removed": {
+            "last_30_days": 0,
+            "last_90_days": 0,
+            "last_365_days": 0,
+            "last_3_years": 0
+          },
+          "lines_net": {
+            "last_30_days": 366,
+            "last_90_days": 366,
+            "last_365_days": 366,
+            "last_3_years": 366
+          }
+        }
+      ]
+    }
+  ],
+  "authors": [
+    {
+      "name": "Alice Developer",
+      "email": "alice@example.com",
+      "username": "alice",
+      "domain": "example.com",
+      "commits": {
+        "last_30_days": 1,
+        "last_90_days": 1,
+        "last_365_days": 1,
+        "last_3_years": 1
+      },
+      "lines_added": {
+        "last_30_days": 5,
+        "last_90_days": 5,
+        "last_365_days": 5,
+        "last_3_years": 5
+      },
+      "lines_removed": {
+        "last_30_days": 1,
+        "last_90_days": 1,
+        "last_365_days": 1,
+        "last_3_years": 1
+      },
+      "lines_net": {
+        "last_30_days": 4,
+        "last_90_days": 4,
+        "last_365_days": 4,
+        "last_3_years": 4
+      },
+      "repositories_count": {
+        "last_30_days": 1,
+        "last_90_days": 1,
+        "last_365_days": 1,
+        "last_3_years": 1
+      }
+    },
+    {
+      "name": "Test User",
+      "email": "test@example.com",
+      "username": "test",
+      "domain": "example.com",
+      "commits": {
+        "last_30_days": 2,
+        "last_90_days": 2,
+        "last_365_days": 2,
+        "last_3_years": 2
+      },
+      "lines_added": {
+        "last_30_days": 366,
+        "last_90_days": 366,
+        "last_365_days": 366,
+        "last_3_years": 366
+      },
+      "lines_removed": {
+        "last_30_days": 0,
+        "last_90_days": 0,
+        "last_365_days": 0,
+        "last_3_years": 0
+      },
+      "lines_net": {
+        "last_30_days": 366,
+        "last_90_days": 366,
+        "last_365_days": 366,
+        "last_3_years": 366
+      },
+      "repositories_count": {
+        "last_30_days": 1,
+        "last_90_days": 1,
+        "last_365_days": 1,
+        "last_3_years": 1
+      }
+    }
+  ],
+  "organizations": [
+    {
+      "domain": "example.com",
+      "contributor_count": 2,
+      "commits": {
+        "last_30_days": 3,
+        "last_90_days": 3,
+        "last_365_days": 3,
+        "last_3_years": 3
+      },
+      "lines_added": {
+        "last_30_days": 371,
+        "last_90_days": 371,
+        "last_365_days": 371,
+        "last_3_years": 371
+      },
+      "lines_removed": {
+        "last_30_days": 1,
+        "last_90_days": 1,
+        "last_365_days": 1,
+        "last_3_years": 1
+      },
+      "lines_net": {
+        "last_30_days": 370,
+        "last_90_days": 370,
+        "last_365_days": 370,
+        "last_3_years": 370
+      },
+      "repositories_count": {
+        "last_30_days": 2,
+        "last_90_days": 2,
+        "last_365_days": 2,
+        "last_3_years": 2
+      }
+    }
+  ],
+  "summaries": {
+    "counts": {
+      "total_repositories": 1,
+      "active_repositories": 1,
+      "inactive_repositories": 0,
+      "total_commits": 0,
+      "total_authors": 2,
+      "total_organizations": 1
+    },
+    "activity_distribution": {
+      "very_old": [],
+      "old": [],
+      "recent_inactive": []
+    },
+    "top_active_repositories": [
+      {
+        "name": "sample-repo",
+        "path": "test-repos/sample-repo",
+        "last_commit_timestamp": "2025-09-17T20:12:42+01:00",
+        "days_since_last_commit": 0,
+        "is_active": true,
+        "commit_counts": {
+          "last_30_days": 3,
+          "last_90_days": 3,
+          "last_365_days": 3,
+          "last_3_years": 3
+        },
+        "loc_stats": {
+          "last_30_days": {
+            "added": 371,
+            "removed": 1,
+            "net": 370
+          },
+          "last_90_days": {
+            "added": 371,
+            "removed": 1,
+            "net": 370
+          },
+          "last_365_days": {
+            "added": 371,
+            "removed": 1,
+            "net": 370
+          },
+          "last_3_years": {
+            "added": 371,
+            "removed": 1,
+            "net": 370
+          }
+        },
+        "unique_contributors": {
+          "last_30_days": 2,
+          "last_90_days": 2,
+          "last_365_days": 2,
+          "last_3_years": 2
+        },
+        "features": {
+          "dependabot": {
+            "present": true,
+            "files": [
+              ".github/dependabot.yml"
+            ]
+          },
+          "github2gerrit_workflow": {
+            "present": false,
+            "workflows": []
+          },
+          "pre_commit": {
+            "present": true,
+            "config_file": ".pre-commit-config.yaml",
+            "repos_count": 5
+          },
+          "readthedocs": {
+            "present": true,
+            "config_type": "readthedocs",
+            "config_files": [
+              ".readthedocs.yml"
+            ]
+          },
+          "sonatype_config": {
+            "present": false,
+            "config_files": []
+          },
+          "project_types": {
+            "detected_types": [
+              "python"
+            ],
+            "primary_type": "python",
+            "details": [
+              {
+                "type": "python",
+                "files": [
+                  "requirements.txt"
+                ],
+                "confidence": 1
+              }
+            ]
+          },
+          "workflows": {
+            "count": 0,
+            "classified": {
+              "verify": 0,
+              "merge": 0,
+              "other": 0
+            },
+            "files": []
+          }
+        },
+        "authors": [
+          {
+            "name": "Alice Developer",
+            "email": "alice@example.com",
+            "username": "alice",
+            "commits": {
+              "last_30_days": 1,
+              "last_90_days": 1,
+              "last_365_days": 1,
+              "last_3_years": 1
+            },
+            "lines_added": {
+              "last_30_days": 5,
+              "last_90_days": 5,
+              "last_365_days": 5,
+              "last_3_years": 5
+            },
+            "lines_removed": {
+              "last_30_days": 1,
+              "last_90_days": 1,
+              "last_365_days": 1,
+              "last_3_years": 1
+            },
+            "lines_net": {
+              "last_30_days": 4,
+              "last_90_days": 4,
+              "last_365_days": 4,
+              "last_3_years": 4
+            }
+          },
+          {
+            "name": "Test User",
+            "email": "test@example.com",
+            "username": "test",
+            "commits": {
+              "last_30_days": 2,
+              "last_90_days": 2,
+              "last_365_days": 2,
+              "last_3_years": 2
+            },
+            "lines_added": {
+              "last_30_days": 366,
+              "last_90_days": 366,
+              "last_365_days": 366,
+              "last_3_years": 366
+            },
+            "lines_removed": {
+              "last_30_days": 0,
+              "last_90_days": 0,
+              "last_365_days": 0,
+              "last_3_years": 0
+            },
+            "lines_net": {
+              "last_30_days": 366,
+              "last_90_days": 366,
+              "last_365_days": 366,
+              "last_3_years": 366
+            }
+          }
+        ]
+      }
+    ],
+    "least_active_repositories": [],
+    "top_contributors_commits": [
+      {
+        "name": "Test User",
+        "email": "test@example.com",
+        "username": "test",
+        "domain": "example.com",
+        "commits": {
+          "last_30_days": 2,
+          "last_90_days": 2,
+          "last_365_days": 2,
+          "last_3_years": 2
+        },
+        "lines_added": {
+          "last_30_days": 366,
+          "last_90_days": 366,
+          "last_365_days": 366,
+          "last_3_years": 366
+        },
+        "lines_removed": {
+          "last_30_days": 0,
+          "last_90_days": 0,
+          "last_365_days": 0,
+          "last_3_years": 0
+        },
+        "lines_net": {
+          "last_30_days": 366,
+          "last_90_days": 366,
+          "last_365_days": 366,
+          "last_3_years": 366
+        },
+        "repositories_count": {
+          "last_30_days": 1,
+          "last_90_days": 1,
+          "last_365_days": 1,
+          "last_3_years": 1
+        }
+      },
+      {
+        "name": "Alice Developer",
+        "email": "alice@example.com",
+        "username": "alice",
+        "domain": "example.com",
+        "commits": {
+          "last_30_days": 1,
+          "last_90_days": 1,
+          "last_365_days": 1,
+          "last_3_years": 1
+        },
+        "lines_added": {
+          "last_30_days": 5,
+          "last_90_days": 5,
+          "last_365_days": 5,
+          "last_3_years": 5
+        },
+        "lines_removed": {
+          "last_30_days": 1,
+          "last_90_days": 1,
+          "last_365_days": 1,
+          "last_3_years": 1
+        },
+        "lines_net": {
+          "last_30_days": 4,
+          "last_90_days": 4,
+          "last_365_days": 4,
+          "last_3_years": 4
+        },
+        "repositories_count": {
+          "last_30_days": 1,
+          "last_90_days": 1,
+          "last_365_days": 1,
+          "last_3_years": 1
+        }
+      }
+    ],
+    "top_contributors_loc": [
+      {
+        "name": "Test User",
+        "email": "test@example.com",
+        "username": "test",
+        "domain": "example.com",
+        "commits": {
+          "last_30_days": 2,
+          "last_90_days": 2,
+          "last_365_days": 2,
+          "last_3_years": 2
+        },
+        "lines_added": {
+          "last_30_days": 366,
+          "last_90_days": 366,
+          "last_365_days": 366,
+          "last_3_years": 366
+        },
+        "lines_removed": {
+          "last_30_days": 0,
+          "last_90_days": 0,
+          "last_365_days": 0,
+          "last_3_years": 0
+        },
+        "lines_net": {
+          "last_30_days": 366,
+          "last_90_days": 366,
+          "last_365_days": 366,
+          "last_3_years": 366
+        },
+        "repositories_count": {
+          "last_30_days": 1,
+          "last_90_days": 1,
+          "last_365_days": 1,
+          "last_3_years": 1
+        }
+      },
+      {
+        "name": "Alice Developer",
+        "email": "alice@example.com",
+        "username": "alice",
+        "domain": "example.com",
+        "commits": {
+          "last_30_days": 1,
+          "last_90_days": 1,
+          "last_365_days": 1,
+          "last_3_years": 1
+        },
+        "lines_added": {
+          "last_30_days": 5,
+          "last_90_days": 5,
+          "last_365_days": 5,
+          "last_3_years": 5
+        },
+        "lines_removed": {
+          "last_30_days": 1,
+          "last_90_days": 1,
+          "last_365_days": 1,
+          "last_3_years": 1
+        },
+        "lines_net": {
+          "last_30_days": 4,
+          "last_90_days": 4,
+          "last_365_days": 4,
+          "last_3_years": 4
+        },
+        "repositories_count": {
+          "last_30_days": 1,
+          "last_90_days": 1,
+          "last_365_days": 1,
+          "last_3_years": 1
+        }
+      }
+    ],
+    "top_organizations": [
+      {
+        "domain": "example.com",
+        "contributor_count": 2,
+        "commits": {
+          "last_30_days": 3,
+          "last_90_days": 3,
+          "last_365_days": 3,
+          "last_3_years": 3
+        },
+        "lines_added": {
+          "last_30_days": 371,
+          "last_90_days": 371,
+          "last_365_days": 371,
+          "last_3_years": 371
+        },
+        "lines_removed": {
+          "last_30_days": 1,
+          "last_90_days": 1,
+          "last_365_days": 1,
+          "last_3_years": 1
+        },
+        "lines_net": {
+          "last_30_days": 370,
+          "last_90_days": 370,
+          "last_365_days": 370,
+          "last_3_years": 370
+        },
+        "repositories_count": {
+          "last_30_days": 2,
+          "last_90_days": 2,
+          "last_365_days": 2,
+          "last_3_years": 2
+        }
+      }
+    ]
+  },
+  "errors": []
+}
