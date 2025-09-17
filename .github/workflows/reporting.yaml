@@ -140,16 +140,6 @@ jobs:
           if [ -d "./gerrit-repos" ]; then
             echo "🔍 Listing repository structure:"
 
-            # Show top-level directory structure
-            {
-              echo "### Directory Structure:"
-              echo '```'
-              find ./gerrit-repos -maxdepth 2 -type d 2>/dev/null | \
-                sort | head -20
-              echo '```'
-              echo ""
-            } >> "$GITHUB_STEP_SUMMARY"
-
             # Calculate and display disk usage
             echo -e "### 💾 Disk Usage Analysis:\n" >> "$GITHUB_STEP_SUMMARY"
 
