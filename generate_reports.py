@@ -29,16 +29,12 @@ import datetime
 import hashlib
 import json
 import logging
-import os
-import re
 import subprocess
 import sys
 import tempfile
-import threading
 import zipfile
-from collections import defaultdict
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple, Union, DefaultDict
+from typing import Any, Dict, List, Optional, Union, cast
 
 try:
     import yaml  # type: ignore
@@ -102,7 +98,7 @@ def setup_logging(level: str = "INFO", include_timestamps: bool = True) -> loggi
 # CONFIGURATION LOADING AND DEEP MERGE
 # =============================================================================
 
-def deep_merge_dicts(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+def deep_merge_dicts(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     """Recursively merge two dictionaries, with override taking precedence."""
     result = copy.deepcopy(base)
 
@@ -124,7 +120,7 @@ def load_yaml_config(config_path: Path) -> Dict[str, Any]:
     except yaml.YAMLError as e:
         raise ValueError(f"Invalid YAML in {config_path}: {e}")
 
-def load_configuration(config_dir: Path, project: str) -> Dict[str, Any]:
+def load_configuration(config_dir: Path, project: str) -> dict[str, Any]:
     """
     Load configuration with template + project override merge strategy.
 
@@ -164,7 +160,7 @@ def compute_config_digest(config: Dict[str, Any]) -> str:
 # TIME WINDOW COMPUTATION
 # =============================================================================
 
-def compute_time_windows(config: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+def setup_time_windows(config: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """
     Compute time window boundaries based on configuration.
 
@@ -195,7 +191,7 @@ def compute_time_windows(config: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
 class GitDataCollector:
     """Handles Git repository analysis and metric collection."""
 
-    def __init__(self, config: Dict[str, Any], time_windows: Dict[str, Dict[str, Any]], logger: logging.Logger):
+    def __init__(self, config: dict[str, Any], time_windows: dict[str, dict[str, Any]], logger: logging.Logger) -> None:
         self.config = config
         self.time_windows = time_windows
         self.logger = logger
@@ -205,7 +201,7 @@ class GitDataCollector:
             self.cache_dir = Path(tempfile.gettempdir()) / "repo_reporting_cache"
             self.cache_dir.mkdir(exist_ok=True)
 
-    def collect_repo_git_metrics(self, repo_path: Path) -> Dict[str, Any]:
+    def collect_repo_git_metrics(self, repo_path: Path) -> dict[str, Any]:
         """
         Extract Git metrics for a single repository across all time windows.
 
@@ -224,6 +220,8 @@ class GitDataCollector:
                 "path": str(repo_path),
                 "last_commit_timestamp": None,
                 "days_since_last_commit": None,
+                "creation_timestamp": None,
+                "days_since_creation": None,
                 "is_active": False,
                 "commit_counts": {window: 0 for window in self.time_windows},
                 "loc_stats": {window: {"added": 0, "removed": 0, "net": 0} for window in self.time_windows},
@@ -270,7 +268,7 @@ class GitDataCollector:
 
             # Process commits into time windows
             for commit_data in commits_data:
-                self._process_commit_into_metrics(commit_data, metrics)
+                self._update_commit_metrics(commit_data, metrics)
 
             # Finalize repository metrics
             self._finalize_repo_metrics(metrics, repo_name)
@@ -287,7 +285,7 @@ class GitDataCollector:
 
             # Save to cache if enabled
             if self.cache_enabled:
-                self._save_to_cache(repo_path, metrics)
+                self._save_cached_metrics(repo_path, repo_data)
 
         except Exception as e:
             self.logger.error(f"Error collecting Git metrics for {repo_name}: {e}")
@@ -297,7 +295,7 @@ class GitDataCollector:
 
         return metrics
 
-    def bucket_commit_into_windows(self, commit_datetime: datetime.datetime, windows: Dict[str, Dict[str, Any]]) -> List[str]:
+    def bucket_commit_into_windows(self, commit_datetime: datetime.datetime, time_windows: dict[str, dict[str, Any]]) -> List[str]:
         """
         Determine which time windows a commit falls into.
 
@@ -306,13 +304,13 @@ class GitDataCollector:
         matching_windows = []
         commit_timestamp = commit_datetime.timestamp()
 
-        for window_name, window_data in windows.items():
+        for window_name, window_data in time_windows.items():
             if commit_timestamp >= window_data["start_timestamp"]:
                 matching_windows.append(window_name)
 
         return matching_windows
 
-    def normalize_author_identity(self, name: str, email: str) -> Dict[str, str]:
+    def normalize_author_identity(self, name: str, email: str) -> tuple[str, str]:
         """
         Normalize author identity with consistent format.
 
@@ -349,7 +347,7 @@ class GitDataCollector:
                 normalized["username"] = clean_email
                 normalized["domain"] = ""
 
-        return normalized
+        return (normalized["name"], normalized["email"])
 
     def _parse_git_log_output(self, git_output: str, repo_name: str) -> List[Dict[str, Any]]:
         """
@@ -422,21 +420,29 @@ class GitDataCollector:
 
         return commits
 
-    def _process_commit_into_metrics(self, commit_data: Dict[str, Any], metrics: Dict[str, Any]) -> None:
+    def _update_commit_metrics(self, commit: dict[str, Any], metrics: dict[str, Any]) -> None:
         """Process a single commit into the metrics structure."""
-        commit_windows = self.bucket_commit_into_windows(commit_data["date"], self.time_windows)
+        applicable_windows = self.bucket_commit_into_windows(commit["date"], self.time_windows)
 
         # Normalize author identity
-        author_info = self.normalize_author_identity(commit_data["author_name"], commit_data["author_email"])
-        author_email = author_info["email"]
+        norm_name, norm_email = self.normalize_author_identity(commit["author_name"], commit["author_email"])
+        author_email = norm_email
+
+        # Create author info dict for compatibility
+        author_info = {
+            "name": norm_name,
+            "email": norm_email,
+            "username": norm_name.split()[0] if norm_name else "",
+            "domain": norm_email.split("@")[-1] if "@" in norm_email else ""
+        }
 
         # Calculate LOC changes for this commit
-        total_added = sum(f["added"] for f in commit_data["files_changed"])
-        total_removed = sum(f["removed"] for f in commit_data["files_changed"])
+        total_added = sum(f["added"] for f in commit["files_changed"])
+        total_removed = sum(f["removed"] for f in commit["files_changed"])
         net_lines = total_added - total_removed
 
         # Update repository metrics for each matching window
-        for window in commit_windows:
+        for window in applicable_windows:
             metrics["repository"]["commit_counts"][window] += 1
             metrics["repository"]["loc_stats"][window]["added"] += total_added
             metrics["repository"]["loc_stats"][window]["removed"] += total_removed
@@ -457,14 +463,14 @@ class GitDataCollector:
 
         # Update author metrics for each matching window
         author_metrics = metrics["authors"][author_email]
-        for window in commit_windows:
+        for window in applicable_windows:
             author_metrics["commit_counts"][window] += 1
             author_metrics["loc_stats"][window]["added"] += total_added
             author_metrics["loc_stats"][window]["removed"] += total_removed
             author_metrics["loc_stats"][window]["net"] += net_lines
             author_metrics["repositories"][window].add(metrics["repository"]["name"])
 
-    def _finalize_repo_metrics(self, metrics: Dict[str, Any], repo_name: str) -> None:
+    def _finalize_repo_metrics(self, metrics: dict[str, Any], repo_name: str) -> None:
         """Finalize repository metrics after processing all commits."""
         repo_metrics = metrics["repository"]
 
@@ -569,7 +575,7 @@ class GitDataCollector:
             self.logger.debug(f"Failed to load cache for {repo_path.name}: {e}")
             return None
 
-    def _save_to_cache(self, repo_path: Path, metrics: Dict[str, Any]) -> None:
+    def _save_cached_metrics(self, repo_path: Path, metrics: dict[str, Any]) -> None:
         """Save metrics to cache for future use."""
         try:
             cache_path = self._get_cache_path(repo_path)
@@ -594,10 +600,10 @@ class GitDataCollector:
 class FeatureRegistry:
     """Registry for repository feature detection functions."""
 
-    def __init__(self, config: Dict[str, Any], logger: logging.Logger):
+    def __init__(self, config: dict[str, Any], logger: logging.Logger) -> None:
         self.config = config
         self.logger = logger
-        self.checks: Dict[str, Any] = {}
+        self.checks: dict[str, Any] = {}
         self._register_default_checks()
 
     def register(self, feature_name: str, check_function):
@@ -614,7 +620,7 @@ class FeatureRegistry:
         self.register("project_types", self._check_project_types)
         self.register("workflows", self._check_workflows)
 
-    def scan_repository_features(self, repo_path: Path) -> Dict[str, Any]:
+    def detect_features(self, repo_path: Path) -> dict[str, Any]:
         """
         Scan repository for all enabled features.
 
@@ -633,7 +639,7 @@ class FeatureRegistry:
 
         return results
 
-    def _check_dependabot(self, repo_path: Path) -> Dict[str, Any]:
+    def _check_dependabot(self, repo_path: Path) -> dict[str, Any]:
         """Check for Dependabot configuration."""
         config_files = [
             ".github/dependabot.yml",
@@ -651,7 +657,7 @@ class FeatureRegistry:
             "files": found_files
         }
 
-    def _check_github2gerrit_workflow(self, repo_path: Path) -> Dict[str, Any]:
+    def _check_github2gerrit_workflow(self, repo_path: Path) -> dict[str, Any]:
         """Check for GitHub to Gerrit workflow patterns."""
         workflows_dir = repo_path / ".github" / "workflows"
         if not workflows_dir.exists():
@@ -662,7 +668,7 @@ class FeatureRegistry:
             "github2gerrit", "gerrit-review", "gerrit-submit"
         ]
 
-        matching_workflows: List[Dict[str, str]] = []
+        matching_workflows: list[dict[str, str]] = []
         try:
             for workflow_file in workflows_dir.glob("*.yml"):
                 try:
@@ -701,7 +707,7 @@ class FeatureRegistry:
             "workflows": matching_workflows
         }
 
-    def _check_pre_commit(self, repo_path: Path) -> Dict[str, Any]:
+    def _check_pre_commit(self, repo_path: Path) -> dict[str, Any]:
         """Check for pre-commit configuration."""
         config_files = [
             ".pre-commit-config.yaml",
@@ -715,7 +721,7 @@ class FeatureRegistry:
                 found_config = config_file
                 break
 
-        result = {
+        result: dict[str, Any] = {
             "present": found_config is not None,
             "config_file": found_config
         }
@@ -729,13 +735,13 @@ class FeatureRegistry:
                     # Count number of repos/hooks (basic analysis)
                     import re
                     repos_count = len(re.findall(r'^\s*-\s*repo:', content, re.MULTILINE))
-                    result["repos_count"] = repos_count  # type: ignore
+                    result["repos_count"] = repos_count
             except (IOError, UnicodeDecodeError):
                 pass
 
         return result
 
-    def _check_readthedocs(self, repo_path: Path) -> Dict[str, Any]:
+    def _check_readthedocs(self, repo_path: Path) -> dict[str, Any]:
         """Check for Read the Docs configuration."""
         # Check for RTD config files
         rtd_configs = [
@@ -785,7 +791,7 @@ class FeatureRegistry:
             "config_files": found_configs
         }
 
-    def _check_sonatype_config(self, repo_path: Path) -> Dict[str, Any]:
+    def _check_sonatype_config(self, repo_path: Path) -> dict[str, Any]:
         """Check for Sonatype configuration files."""
         sonatype_configs = [
             ".sonatype-lift.yaml",
@@ -807,7 +813,7 @@ class FeatureRegistry:
             "config_files": found_configs
         }
 
-    def _check_project_types(self, repo_path: Path) -> Dict[str, Any]:
+    def _check_project_types(self, repo_path: Path) -> dict[str, Any]:
         """Detect project types based on configuration files."""
         project_types = {
             "maven": ["pom.xml"],
@@ -865,7 +871,7 @@ class FeatureRegistry:
             "details": detected_types
         }
 
-    def _check_workflows(self, repo_path: Path) -> Dict[str, Any]:
+    def _check_workflows(self, repo_path: Path) -> dict[str, Any]:
         """Analyze GitHub workflows."""
         workflows_dir = repo_path / ".github" / "workflows"
         if not workflows_dir.exists():
@@ -895,15 +901,19 @@ class FeatureRegistry:
         except OSError:
             return {"count": 0, "classified": {"verify": 0, "merge": 0, "other": 0}, "files": []}
 
+        # Extract just the workflow names for telemetry
+        workflow_names = [workflow_info["filename"] for workflow_info in workflow_files]
+
         return {
             "count": len(workflow_files),
             "classified": classified,
-            "files": workflow_files
+            "files": workflow_files,
+            "workflow_names": workflow_names
         }
 
-    def _analyze_workflow_file(self, workflow_file: Path, verify_patterns: List[str], merge_patterns: List[str]) -> Dict[str, Any]:
+    def _analyze_workflow_file(self, workflow_file: Path, verify_patterns: list[str], merge_patterns: list[str]) -> dict[str, Any]:
         """Analyze a single workflow file for classification."""
-        workflow_info: Dict[str, Any] = {
+        workflow_info: dict[str, Any] = {
             "name": workflow_file.name,
             "classification": "other",
             "triggers": [],
@@ -983,11 +993,11 @@ class FeatureRegistry:
 class DataAggregator:
     """Handles aggregation of repository data into global summaries."""
 
-    def __init__(self, config: Dict[str, Any], logger: logging.Logger):
+    def __init__(self, config: dict[str, Any], logger: logging.Logger) -> None:
         self.config = config
         self.logger = logger
 
-    def aggregate_global_data(self, repo_metrics: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def aggregate_global_data(self, repo_metrics: list[dict[str, Any]]) -> dict[str, Any]:
         """
         Aggregate all repository metrics into global summaries.
 
@@ -1120,7 +1130,7 @@ class DataAggregator:
 
         return summaries
 
-    def compute_author_rollups(self, repo_metrics: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def compute_author_rollups(self, repo_metrics: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """
         Aggregate author metrics across all repositories.
 
@@ -1128,7 +1138,9 @@ class DataAggregator:
         and tracking unique repositories touched per time window.
         """
         from collections import defaultdict
-        author_aggregates: DefaultDict[str, Dict[str, Any]] = defaultdict(lambda: {
+
+
+        author_aggregates: dict[str, dict[str, Any]] = defaultdict(lambda: {
             "name": "",
             "email": "",
             "username": "",
@@ -1159,18 +1171,19 @@ class DataAggregator:
 
                 # Aggregate metrics for each time window
                 for window_name in author.get("commits", {}):
-                    author_aggregates[email]["repositories_touched"][window_name].add(repo_name)
+                    repos_set = cast(set[str], author_aggregates[email]["repositories_touched"][window_name])
+                    repos_set.add(repo_name)
                     author_aggregates[email]["commits"][window_name] += author.get("commits", {}).get(window_name, 0)
                     author_aggregates[email]["lines_added"][window_name] += author.get("lines_added", {}).get(window_name, 0)
                     author_aggregates[email]["lines_removed"][window_name] += author.get("lines_removed", {}).get(window_name, 0)
                     author_aggregates[email]["lines_net"][window_name] += author.get("lines_net", {}).get(window_name, 0)
 
         # Convert to list format and finalize repository counts
-        authors = []
+        authors: List[Dict[str, Any]] = []
         for email, data in author_aggregates.items():
             author_record = {
                 "name": data["name"],
-                "email": data["email"],
+                "email": email,
                 "username": data["username"],
                 "domain": data["domain"],
                 "commits": dict(data["commits"]),
@@ -1186,14 +1199,16 @@ class DataAggregator:
         self.logger.info(f"Aggregated {len(authors)} unique authors across repositories")
         return authors
 
-    def compute_org_rollups(self, authors: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def compute_org_rollups(self, authors: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """
         Aggregate organization metrics from author data.
 
         Groups authors by email domain and aggregates their contributions.
         """
         from collections import defaultdict
-        org_aggregates: DefaultDict[str, Dict[str, Any]] = defaultdict(lambda: {
+
+
+        org_aggregates: dict[str, dict[str, Any]] = defaultdict(lambda: {
             "domain": "",
             "contributor_count": 0,
             "contributors": set(),
@@ -1211,7 +1226,8 @@ class DataAggregator:
                 continue
 
             org_aggregates[domain]["domain"] = domain
-            org_aggregates[domain]["contributors"].add(author.get("email", ""))
+            contributors_set = cast(set[str], org_aggregates[domain]["contributors"])
+            contributors_set.add(author.get("email", ""))
 
             # Sum metrics across all time windows
             for window_name in author.get("commits", {}):
@@ -1247,7 +1263,7 @@ class DataAggregator:
         self.logger.info(f"Aggregated {len(organizations)} organizations from author domains")
         return organizations
 
-    def rank_entities(self, entities: List[Dict[str, Any]], sort_key: str, reverse: bool = True, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+    def rank_entities(self, entities: list[dict[str, Any]], sort_key: str, reverse: bool = False, limit: int | None = None) -> list[dict[str, Any]]:
         """
         Sort entities by a metric with deterministic tie-breaking.
 
@@ -1270,6 +1286,10 @@ class DataAggregator:
                     return 999999  # Very large number for very old/no commits
                 else:
                     return 0  # Default for other metrics
+
+            # Ensure numeric return value
+            if not isinstance(value, (int, float)):
+                return 0
             return value
 
         def get_name(entity):
@@ -1294,11 +1314,11 @@ class DataAggregator:
 class ReportRenderer:
     """Handles rendering of reports in various formats."""
 
-    def __init__(self, config: Dict[str, Any], logger: logging.Logger):
+    def __init__(self, config: dict[str, Any], logger: logging.Logger) -> None:
         self.config = config
         self.logger = logger
 
-    def render_json_report(self, data: Dict[str, Any], output_path: Path) -> None:
+    def render_json_report(self, data: dict[str, Any], output_path: Path) -> None:
         """
         Write the canonical JSON report.
 
@@ -1309,7 +1329,7 @@ class ReportRenderer:
         with open(output_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2, ensure_ascii=False, default=str)
 
-    def render_markdown_report(self, data: Dict[str, Any], output_path: Path) -> str:
+    def render_markdown_report(self, data: dict[str, Any], output_path: Path) -> str:
         """
         Generate Markdown report from JSON data.
 
@@ -1357,7 +1377,7 @@ class ReportRenderer:
 
         return zip_path
 
-    def _generate_markdown_content(self, data: Dict[str, Any]) -> str:
+    def _generate_markdown_content(self, data: dict[str, Any]) -> str:
         """Generate complete Markdown content from JSON data."""
         include_sections = self.config.get("output", {}).get("include_sections", {})
 
@@ -1379,6 +1399,12 @@ class ReportRenderer:
         # Least active repositories
         sections.append(self._generate_least_active_repositories_section(data))
 
+        # Repositories with no commits
+        sections.append(self._generate_no_commit_repositories_section(data))
+
+        # Deployed GitHub workflows telemetry
+        sections.append(self._generate_deployed_workflows_section(data))
+
         # Contributors
         if include_sections.get("contributors", True):
             sections.append(self._generate_contributors_section(data))
@@ -1396,7 +1422,7 @@ class ReportRenderer:
 
         return "\n\n".join(sections)
 
-    def _generate_title_section(self, data: Dict[str, Any]) -> str:
+    def _generate_title_section(self, data: dict[str, Any]) -> str:
         """Generate title and metadata section."""
         project = data.get("project", "Repository Analysis")
         generated_at = data.get("generated_at", "")
@@ -1422,7 +1448,7 @@ class ReportRenderer:
 **Contributors Found:** {total_authors:,}
 **Schema Version:** {data.get("schema_version", "1.0.0")}"""
 
-    def _generate_summary_section(self, data: Dict[str, Any]) -> str:
+    def _generate_summary_section(self, data: dict[str, Any]) -> str:
         """Generate global summary statistics section."""
         counts = data.get("summaries", {}).get("counts", {})
 
@@ -1448,7 +1474,7 @@ class ReportRenderer:
 | **Organizations** | {self._format_number(total_orgs)} | - |
 | **Total Commits** | {self._format_number(total_commits)} | - |"""
 
-    def _generate_activity_distribution_section(self, data: Dict[str, Any]) -> str:
+    def _generate_activity_distribution_section(self, data: dict[str, Any]) -> str:
         """Generate activity distribution section."""
         activity_dist = data.get("summaries", {}).get("activity_distribution", {})
 
@@ -1475,7 +1501,7 @@ class ReportRenderer:
 
         return "\n\n".join(sections)
 
-    def _generate_activity_table(self, repos: List[Dict]) -> str:
+    def _generate_activity_table(self, repos: list[dict[str, Any]]) -> str:
         """Generate activity table for inactive repositories."""
         if not repos:
             return "*No repositories in this category.*"
@@ -1502,7 +1528,7 @@ class ReportRenderer:
 
         return "\n".join(lines)
 
-    def _generate_top_repositories_section(self, data: Dict[str, Any]) -> str:
+    def _generate_top_repositories_section(self, data: dict[str, Any]) -> str:
         """Generate top active repositories section."""
         top_repos = data.get("summaries", {}).get("top_active_repositories", [])
 
@@ -1531,7 +1557,7 @@ class ReportRenderer:
 
         return "\n".join(lines)
 
-    def _generate_least_active_repositories_section(self, data: Dict[str, Any]) -> str:
+    def _generate_least_active_repositories_section(self, data: dict[str, Any]) -> str:
         """Generate least active repositories section."""
         least_active = data.get("summaries", {}).get("least_active_repositories", [])
 
@@ -1563,7 +1589,70 @@ class ReportRenderer:
 
         return "\n".join(lines)
 
-    def _generate_contributors_section(self, data: Dict[str, Any]) -> str:
+    def _generate_no_commit_repositories_section(self, data: dict[str, Any]) -> str:
+        """Generate repositories with no commits section."""
+        no_commit_repos = data.get("summaries", {}).get("no_commit_repositories", [])
+
+        if not no_commit_repos:
+            return "## 📝 Repositories with No Commits\n\n*All repositories have commits!*"
+
+        lines = ["## 📝 Repositories with No Commits",
+                 "",
+                 "These repositories were created but have never received any commits:",
+                 "",
+                 "| Repository | Days Since Creation | Created |",
+                 "|------------|---------------------|---------|"]
+
+        for repo in no_commit_repos:
+            name = repo.get("name", "Unknown")
+            days_since_creation = repo.get("days_since_creation")
+
+            if days_since_creation is not None:
+                creation_age = self._format_age(days_since_creation)
+                days_display = f"{days_since_creation:,}"
+            else:
+                creation_age = "Unknown"
+                days_display = "N/A"
+
+            lines.append(f"| {name} | {days_display} | {creation_age} |")
+
+        lines.extend(["", f"**Total:** {len(no_commit_repos)} repositories with no commits"])
+        return "\n".join(lines)
+
+    def _generate_deployed_workflows_section(self, data: dict[str, Any]) -> str:
+        """Generate deployed GitHub workflows telemetry section."""
+        repositories = data.get("repositories", [])
+
+        if not repositories:
+            return "## ✅ Deployed GitHub Workflows\n\n*No repositories found.*"
+
+        # Collect repositories that have workflows
+        repos_with_workflows = []
+        for repo in repositories:
+            workflow_names = repo.get("features", {}).get("workflows", {}).get("workflow_names", [])
+            if workflow_names:
+                repos_with_workflows.append({
+                    "name": repo.get("name", "Unknown"),
+                    "workflow_names": workflow_names
+                })
+
+        if not repos_with_workflows:
+            return "## ✅ Deployed GitHub Workflows\n\n*No GitHub workflows detected in any repositories.*"
+
+        lines = ["## ✅ Deployed GitHub Workflows",
+                 "",
+                 "| Repository | Workflow Name(s) |",
+                 "|------------|------------------|"]
+
+        for repo in sorted(repos_with_workflows, key=lambda x: x["name"]):
+            name = repo["name"]
+            workflow_names_str = ", ".join(sorted(repo["workflow_names"]))
+            lines.append(f"| {name} | {workflow_names_str} |")
+
+        lines.extend(["", f"**Total:** {len(repos_with_workflows)} repositories with GitHub workflows"])
+        return "\n".join(lines)
+
+    def _generate_contributors_section(self, data: dict[str, Any]) -> str:
         """Generate contributors leaderboards section."""
         top_commits = data.get("summaries", {}).get("top_contributors_commits", [])
         top_loc = data.get("summaries", {}).get("top_contributors_loc", [])
@@ -1585,7 +1674,7 @@ class ReportRenderer:
 
         return "\n\n".join(sections)
 
-    def _generate_contributors_table(self, contributors: List[Dict], metric_type: str) -> str:
+    def _generate_contributors_table(self, contributors: list[dict[str, Any]], metric_type: str) -> str:
         """Generate contributors table for commits or LOC."""
         if not contributors:
             return "*No contributors found.*"
@@ -1621,7 +1710,7 @@ class ReportRenderer:
 
         return "\n".join(lines)
 
-    def _generate_organizations_section(self, data: Dict[str, Any]) -> str:
+    def _generate_organizations_section(self, data: dict[str, Any]) -> str:
         """Generate organizations leaderboard section."""
         top_orgs = data.get("summaries", {}).get("top_organizations", [])
 
@@ -1644,7 +1733,7 @@ class ReportRenderer:
 
         return "\n".join(lines)
 
-    def _generate_feature_matrix_section(self, data: Dict[str, Any]) -> str:
+    def _generate_feature_matrix_section(self, data: dict[str, Any]) -> str:
         """Generate repository feature matrix section."""
         repositories = data.get("repositories", [])
 
@@ -1683,7 +1772,7 @@ class ReportRenderer:
 
         return "\n".join(lines)
 
-    def _generate_appendix_section(self, data: Dict[str, Any]) -> str:
+    def _generate_appendix_section(self, data: dict[str, Any]) -> str:
         """Generate appendix with metadata and configuration."""
         config_digest = data.get("config_digest", "")[:12]
         schema_version = data.get("schema_version", "1.0.0")
@@ -2021,7 +2110,7 @@ def format_age_days(days: int) -> str:
         years = days // 365
         return f"{years} year{'s' if years != 1 else ''} ago"
 
-def safe_git_command(command: List[str], repo_path: Path, logger: logging.Logger) -> Tuple[bool, str]:
+def safe_git_command(cmd: list[str], cwd: Path | None, logger: logging.Logger) -> tuple[bool, str]:
     """
     Execute a git command safely with error handling.
 
@@ -2029,23 +2118,22 @@ def safe_git_command(command: List[str], repo_path: Path, logger: logging.Logger
         (success: bool, output_or_error: str)
     """
     try:
-        result = subprocess.run(
-            command,
-            cwd=repo_path,
+        git_result = subprocess.run(
+            cmd,
+            cwd=cwd,
             capture_output=True,
             text=True,
             timeout=300,  # 5 minute timeout
-            check=True
         )
-        return True, result.stdout
+        return git_result.returncode == 0, git_result.stdout.strip() or git_result.stderr.strip()
     except subprocess.CalledProcessError as e:
-        logger.warning(f"Git command failed in {repo_path}: {' '.join(command)} - {e.stderr}")
+        logger.warning(f"Git command failed in {cwd}: {' '.join(cmd)} - {e.stderr}")
         return False, e.stderr
     except subprocess.TimeoutExpired:
-        logger.warning(f"Git command timed out in {repo_path}: {' '.join(command)}")
+        logger.error(f"Git command timed out in {cwd}: {' '.join(cmd)}")
         return False, "Command timed out"
     except Exception as e:
-        logger.warning(f"Unexpected error running git command in {repo_path}: {e}")
+        logger.error(f"Unexpected error running git command in {cwd}: {e}")
         return False, str(e)
 
 # =============================================================================
@@ -2055,7 +2143,7 @@ def safe_git_command(command: List[str], repo_path: Path, logger: logging.Logger
 class RepositoryReporter:
     """Main orchestrator for repository reporting."""
 
-    def __init__(self, config: Dict[str, Any], logger: logging.Logger):
+    def __init__(self, config: dict[str, Any], logger: logging.Logger) -> None:
         self.config = config
         self.logger = logger
         self.git_collector = GitDataCollector(config, {}, logger)
@@ -2063,7 +2151,7 @@ class RepositoryReporter:
         self.aggregator = DataAggregator(config, logger)
         self.renderer = ReportRenderer(config, logger)
 
-    def analyze_repositories(self, repos_path: Path) -> Dict[str, Any]:
+    def analyze_repositories(self, repos_path: Path) -> dict[str, Any]:
         """
         Main analysis workflow.
 
@@ -2078,7 +2166,7 @@ class RepositoryReporter:
             "project": self.config["project"],
             "config_digest": compute_config_digest(self.config),
             "script_version": SCRIPT_VERSION,
-            "time_windows": compute_time_windows(self.config),
+            "time_windows": setup_time_windows(self.config),
             "repositories": [],
             "authors": [],
             "organizations": [],
@@ -2087,20 +2175,21 @@ class RepositoryReporter:
         }
 
         # Update git collector with time windows
-        self.git_collector.time_windows = report_data["time_windows"]
+
+        self.git_collector.time_windows = cast(dict[str, dict[str, Any]], report_data["time_windows"])
 
         # Find all repository directories
         repo_dirs = self._discover_repositories(repos_path)
         self.logger.info(f"Found {len(repo_dirs)} repositories to analyze")
 
         # Analyze repositories (with concurrency)
-        repo_metrics = self._analyze_repositories_concurrent(repo_dirs)
+        repo_metrics = self._analyze_repositories_parallel(repo_dirs)
 
         # Extract successful metrics and errors
         successful_repos = []
         for metrics in repo_metrics:
             if "error" in metrics:
-                report_data["errors"].append(metrics)
+                cast(list[dict[str, Any]], report_data["errors"]).append(metrics)
             else:
                 # Extract the repository record with embedded author data
                 successful_repos.append(metrics["repository"])
@@ -2116,7 +2205,7 @@ class RepositoryReporter:
 
         return report_data
 
-    def generate_reports(self, repos_path: Path, output_dir: Path) -> Dict[str, Path]:
+    def generate_reports(self, repos_path: Path, output_dir: Path) -> dict[str, Path]:
         """
         Generate complete reports (JSON, Markdown, HTML, ZIP).
 
@@ -2161,7 +2250,7 @@ class RepositoryReporter:
 
         return generated_files
 
-    def _discover_repositories(self, repos_path: Path) -> List[Path]:
+    def _discover_repositories(self, repos_path: Path) -> list[Path]:
         """Find all repository directories, including nested ones."""
         if not repos_path.exists():
             raise FileNotFoundError(f"Repository path does not exist: {repos_path}")
@@ -2199,7 +2288,7 @@ class RepositoryReporter:
 
         return sorted(repo_dirs)
 
-    def _analyze_repositories_concurrent(self, repo_dirs: List[Path]) -> List[Dict[str, Any]]:
+    def _analyze_repositories_parallel(self, repo_dirs: list[Path]) -> list[dict[str, Any]]:
         """Analyze repositories with optional concurrency."""
         max_workers = self.config.get("performance", {}).get("max_workers", 8)
 
@@ -2228,25 +2317,25 @@ class RepositoryReporter:
 
         return results
 
-    def _analyze_single_repository(self, repo_dir: Path) -> Dict[str, Any]:
+    def _analyze_single_repository(self, repo_path: Path) -> dict[str, Any]:
         """Analyze a single repository."""
         try:
-            self.logger.debug(f"Analyzing repository: {repo_dir.name}")
+            self.logger.debug(f"Analyzing repository: {repo_path.name}")
 
             # Collect Git metrics
-            git_metrics = self.git_collector.collect_repo_git_metrics(repo_dir)
+            repo_metrics = self.git_collector.collect_repo_git_metrics(repo_path)
 
             # Scan features
-            features = self.feature_registry.scan_repository_features(repo_dir)
-            git_metrics["repository"]["features"] = features
+            repo_features = self.feature_registry.detect_features(repo_path)
+            repo_metrics["repository"]["features"] = repo_features
 
-            return git_metrics
+            return repo_metrics
 
         except Exception as e:
-            self.logger.error(f"Error analyzing {repo_dir.name}: {e}")
+            self.logger.error(f"Error analyzing {repo_path.name}: {e}")
             return {
                 "error": str(e),
-                "repo": repo_dir.name,
+                "repo": repo_path.name,
                 "category": "repository_analysis"
             }
 
