@@ -87,7 +87,9 @@ python3 generate_reports.py \
 #### 2. **Repository Data Validation**
 
 ```yaml
-- name: "Validate repository data"
+
+- name: "Check repository data"
+
   run: |
     # Check gerrit-repos directory exists
     # Count available repositories
@@ -212,7 +214,7 @@ fi
 ```bash
 # Graceful failure with detailed reporting
 if python3 generate_reports.py ...; then
-  echo "✅ Analytics completed successfully"
+  echo "✅ Analytics completed"
 else
   echo "❌ Analytics failed (exit code: $?)"
   # Report failure details to summary
@@ -289,7 +291,7 @@ python generate_reports.py --project O-RAN-SC \
 
 ### **Workflow Testing**
 
-The workflow includes checks to catch issues quickly:
+The workflow includes checks to catch issues:
 
 1. **Configuration validation** - JSON structure and required fields
 2. **Repository validation** - Data availability before analysis
@@ -357,7 +359,7 @@ New: reports-PROJECT/
 - ✅ **Feature detection** results across repositories
 - ✅ **Activity trends** and aging analysis
 - ✅ **Performance metrics** and repository health
-- ✅ **Professional formatting** in various formats
+- ✅ **Professional formatting** in JSON, Markdown, HTML, and ZIP formats
 
 ---
 

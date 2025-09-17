@@ -1261,9 +1261,16 @@ class DataAggregator:
                 value = entity
                 for key in keys:
                     value = value.get(key, 0) if isinstance(value, dict) else 0
-                return value
             else:
-                return entity.get(sort_key, 0)
+                value = entity.get(sort_key, 0)
+
+            # Handle None values with appropriate defaults based on the metric
+            if value is None:
+                if sort_key == "days_since_last_commit":
+                    return 999999  # Very large number for very old/no commits
+                else:
+                    return 0  # Default for other metrics
+            return value
 
         def get_name(entity):
             """Extract name for tie-breaking."""
@@ -2155,19 +2162,40 @@ class RepositoryReporter:
         return generated_files
 
     def _discover_repositories(self, repos_path: Path) -> List[Path]:
-        """Find all repository directories."""
+        """Find all repository directories, including nested ones."""
         if not repos_path.exists():
             raise FileNotFoundError(f"Repository path does not exist: {repos_path}")
 
+        self.logger.debug(f"Discovering repositories in: {repos_path}")
+
         repo_dirs = []
-        for item in repos_path.iterdir():
-            if item.is_dir() and not item.name.startswith('.'):
-                # Check if it's a git repository
-                git_dir = item / ".git"
-                if git_dir.exists():
-                    repo_dirs.append(item)
+
+        def find_git_repos_recursive(path: Path, max_depth: int = 3, current_depth: int = 0) -> None:
+            """Recursively find git repositories up to max_depth."""
+            if current_depth > max_depth:
+                return
+
+            for item in path.iterdir():
+                if item.is_dir() and not item.name.startswith('.'):
+                    # Check if it's a git repository
+                    git_dir = item / ".git"
+                    if git_dir.exists():
+                        self.logger.debug(f"Found git repository: {item.relative_to(repos_path)}")
+                        repo_dirs.append(item)
+                    else:
+                        # Recursively search subdirectories
+                        self.logger.debug(f"Searching subdirectory: {item.relative_to(repos_path)}")
+                        try:
+                            find_git_repos_recursive(item, max_depth, current_depth + 1)
+                        except (PermissionError, OSError) as e:
+                            self.logger.debug(f"Cannot access {item}: {e}")
                 else:
-                    self.logger.debug(f"Skipping non-git directory: {item.name}")
+                    self.logger.debug(f"Skipping {item.name}")
+
+        # Start recursive search
+        find_git_repos_recursive(repos_path)
+
+        self.logger.info(f"Discovered {len(repo_dirs)} git repositories")
 
         return sorted(repo_dirs)
 
