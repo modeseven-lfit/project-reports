@@ -71,24 +71,6 @@ def count_repositories(repos_path):
         print(f"📂 Found {actual_repo_count} repository directories")
         write_to_summary(f"- **Repository Directories Found:** {actual_repo_count}\n")
 
-        # List first few repositories as examples
-        if repo_dirs:
-            print("📝 Sample repositories:")
-            sample_repos = repo_dirs[:5]  # Show first 5 repos
-            for repo_dir in sample_repos:
-                print(f"   - {repo_dir.name}")
-
-            if len(repo_dirs) > 5:
-                remaining = len(repo_dirs) - 5
-                print(f"   ... and {remaining} more")
-
-            write_to_summary("\n### Sample Repositories:\n")
-            for repo_dir in sample_repos:
-                write_to_summary(f"- `{repo_dir.name}`\n")
-            if len(repo_dirs) > 5:
-                remaining = len(repo_dirs) - 5
-                write_to_summary(f"- *... and {remaining} more repositories*\n")
-
         return actual_repo_count
     except OSError as e:
         print(f"❌ Error accessing repository directory: {e}", file=sys.stderr)

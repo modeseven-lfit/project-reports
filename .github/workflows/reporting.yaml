@@ -144,7 +144,8 @@ jobs:
             {
               echo "### Directory Structure:"
               echo '```'
-              find ./gerrit-repos -maxdepth 2 -type d | head -20 | sort
+              find ./gerrit-repos -maxdepth 2 -type d 2>/dev/null | \
+                sort | head -20
               echo '```'
               echo ""
             } >> "$GITHUB_STEP_SUMMARY"
@@ -158,7 +159,7 @@ jobs:
 
             # Count repositories
             repo_count=$(find ./gerrit-repos -maxdepth 1 -type d \
-              -not -name "gerrit-repos" | wc -l)
+              -not -name "gerrit-repos" 2>/dev/null | wc -l)
             echo "📈 Repository count: $repo_count directories"
 
             {
@@ -171,14 +172,14 @@ jobs:
               echo ""
               echo "#### 🏆 Largest Repositories:"
               echo '```'
-              du -sh ./gerrit-repos/* 2>/dev/null | sort -hr | head -10
+              du -sh ./gerrit-repos/* 2>/dev/null | sort -hr | head -10 || true
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
 
             # Show directory structure summary
             # Count different types of content
-            total_dirs=$(find ./gerrit-repos -type d | wc -l)
-            total_files=$(find ./gerrit-repos -type f | wc -l)
+            total_dirs=$(find ./gerrit-repos -type d 2>/dev/null | wc -l)
+            total_files=$(find ./gerrit-repos -type f 2>/dev/null | wc -l)
             repo_size_mb=$(du -sm ./gerrit-repos | cut -f1)
             avg_size=$(echo "scale=2; $repo_size_mb / $repo_count" | \
               bc 2>/dev/null || echo "N/A")
