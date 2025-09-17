@@ -150,11 +150,11 @@ jobs:
             # Count repositories
             repo_count=$(find ./gerrit-repos -maxdepth 1 -type d \
               -not -name "gerrit-repos" 2>/dev/null | wc -l)
-            echo "📈 Repository count: $repo_count directories"
+            echo "📈 Top-level Project/Folders: $repo_count"
 
             {
               echo "📊 **Total downloaded data:** $total_size"
-              echo "📈 **Repository count:** $repo_count directories"
+              echo "📈 **Top-level Project/Folders:** $repo_count"
             } >> "$GITHUB_STEP_SUMMARY"
 
             # Show largest repositories (top 10)
