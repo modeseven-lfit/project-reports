@@ -162,7 +162,7 @@ jobs:
               echo ""
               echo "#### 🏆 Largest Repositories:"
               echo '```'
-              du -sh ./gerrit-repos/* 2>/dev/null | sort -hr | head -10 || true
+              du -sh ./gerrit-repos/* 2>/dev/null | sed 's|./gerrit-repos/||' | sort -hr | head -10 || true
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
 

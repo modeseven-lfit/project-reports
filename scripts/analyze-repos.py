@@ -74,7 +74,7 @@ def count_repositories(repos_path):
         actual_repo_count = len(repo_dirs)
 
         print(f"📂 Found {actual_repo_count} repository directories")
-        write_to_summary(f"- **Repository Directories Found:** {actual_repo_count}\n")
+        write_to_summary(f"- **Top-level Project/Folders:** {actual_repo_count}\n")
 
         return actual_repo_count
     except OSError as e:
