@@ -1,14 +1,22 @@
+<!--
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2025 The Linux Foundation
+-->
+
 # 🔧 Workflow Integration Guide
 
 ## 📋 Overview
 
-This document describes the integration of the comprehensive Repository Reporting System into GitHub Actions workflows. The system has been updated to replace the placeholder `analyze-repos.py` script with a full-featured analytics platform.
+This document describes the integration of the comprehensive Repository
+Reporting System into GitHub Actions workflows. The system now replaces the
+placeholder `analyze-repos.py` script with a full-featured analytics platform.
 
 ---
 
 ## 🚀 What Changed
 
 ### **Before: Placeholder System**
+
 ```bash
 # Old workflow step
 python3 ./scripts/analyze-repos.py \
@@ -18,12 +26,14 @@ python3 ./scripts/analyze-repos.py \
 ```
 
 **Limitations:**
-- ❌ Only counted repositories
-- ❌ No actual analysis performed  
+
+- ❌ Counted repositories without analysis
+- ❌ No actual analysis performed
 - ❌ Basic JSON output with minimal data
 - ❌ No comprehensive reporting
 
 ### **After: Comprehensive Analytics Platform**
+
 ```bash
 # New workflow step
 python3 generate_reports.py \
@@ -35,6 +45,7 @@ python3 generate_reports.py \
 ```
 
 **Capabilities:**
+
 - ✅ **Full Git analytics** (commits, contributors, lines of code)
 - ✅ **Feature detection** (CI/CD, documentation, dependencies)
 - ✅ **Multi-format reports** (JSON, Markdown, HTML, ZIP)
@@ -47,11 +58,12 @@ python3 generate_reports.py \
 ## 🏗️ Architecture Changes
 
 ### **Workflow Structure**
-```
+
+```bash
 ┌─────────────────────┐    ┌─────────────────────┐    ┌─────────────────────┐
 │    Verification     │    │       Analysis      │    │      Summary        │
 │                     │    │                     │    │                     │
-│ • Validate JSON     │───▶│ • Clone repos       │───▶│ • Aggregate results │
+│ • Check JSON       │───▶│ • Clone repos       │───▶│ • Compile results   │
 │ • Parse projects    │    │ • Run analytics     │    │ • Generate summary  │
 │ • Create matrix     │    │ • Generate reports  │    │ • Upload artifacts  │
 └─────────────────────┘    └─────────────────────┘    └─────────────────────┘
@@ -60,6 +72,7 @@ python3 generate_reports.py \
 ### **New Workflow Steps Added**
 
 #### 1. **Python Environment Setup**
+
 ```yaml
 - name: "Set up Python environment"
   uses: actions/setup-python@f677139bbe7f9c59b41e40162b753c062f5d49a3
@@ -72,15 +85,17 @@ python3 generate_reports.py \
 ```
 
 #### 2. **Repository Data Validation**
+
 ```yaml
 - name: "Validate repository data"
   run: |
     # Check gerrit-repos directory exists
     # Count available repositories
-    # Fail gracefully if no data available
+    # Handle missing data appropriately
 ```
 
 #### 3. **Comprehensive Analytics Execution**
+
 ```yaml
 - name: "Run comprehensive analytics"
   run: |
@@ -93,6 +108,7 @@ python3 generate_reports.py \
 ```
 
 #### 4. **Enhanced Result Reporting**
+
 ```yaml
 - name: "Upload comprehensive analysis results"
   uses: actions/upload-artifact@v4
@@ -106,23 +122,25 @@ python3 generate_reports.py \
 ## 📊 Output Artifacts
 
 ### **Generated Files Per Project**
-```
+
+```text
 reports/
   <PROJECT_NAME>/
     ├── report_raw.json           # Complete dataset (JSON)
-    ├── report.md                 # Formatted report (Markdown)  
-    ├── report.html               # Styled report (HTML)
+    ├── report.md                 # Formatted report (Markdown)
+    ├── report.html               # Styled web report (HTML)
     ├── config_resolved.json      # Applied configuration
     └── <PROJECT>_report_bundle.zip # Complete package
 ```
 
 ### **Artifact Upload Structure**
-```
+
+```text
 GitHub Actions Artifacts:
 ├── reports-O-RAN-SC/
 │   └── O-RAN-SC/
 │       ├── report_raw.json
-│       ├── report.md  
+│       ├── report.md
 │       ├── report.html
 │       └── O-RAN-SC_report_bundle.zip
 ├── reports-ONAP/
@@ -138,9 +156,10 @@ GitHub Actions Artifacts:
 ## ⚙️ Configuration System
 
 ### **Project-Specific Configurations**
+
 The system now supports per-project customization:
 
-```
+```text
 configuration/
 ├── template.config           # Base configuration
 ├── O-RAN-SC.config          # O-RAN-SC specific settings
@@ -150,14 +169,16 @@ configuration/
 ```
 
 ### **Configuration Features**
+
 - ✅ **Custom time windows** per project
 - ✅ **Activity thresholds** tailored to project needs
-- ✅ **Report sections** can be enabled/disabled
+- ✅ **Report sections** with enable/disable controls
 - ✅ **Performance tuning** (worker threads, caching)
 - ✅ **Output formatting** preferences
 - ✅ **Feature detection** customization
 
 ### **Example Project Configuration**
+
 ```yaml
 # ONAP.config
 project: "ONAP"
@@ -177,6 +198,7 @@ performance:
 ### **Multi-Level Error Protection**
 
 #### 1. **Repository Validation**
+
 ```bash
 # Validates repository data before analysis
 if [ ! -d "./gerrit-repos" ]; then
@@ -186,6 +208,7 @@ fi
 ```
 
 #### 2. **Analytics Error Handling**
+
 ```bash
 # Graceful failure with detailed reporting
 if python3 generate_reports.py ...; then
@@ -197,13 +220,16 @@ fi
 ```
 
 #### 3. **Per-Repository Resilience**
+
 The analytics system continues processing even if individual repositories fail:
+
 - ✅ **Error isolation** - one failed repo doesn't stop the entire run
 - ✅ **Error logging** - detailed failure information captured
 - ✅ **Partial results** - successful repositories still generate reports
 - ✅ **Error summary** - failed repositories listed in final output
 
 ### **Failure Recovery**
+
 ```json
 {
   "errors": [
@@ -226,19 +252,21 @@ The analytics system continues processing even if individual repositories fail:
 ## 📈 Performance Improvements
 
 ### **Optimization Features**
+
 - ✅ **Parallel processing** with configurable thread pools
 - ✅ **Intelligent caching** reduces repeat Git operations by 85%
-- ✅ **Streaming processing** for memory efficiency  
+- ✅ **Streaming processing** for memory efficiency
 - ✅ **Selective time windows** avoid unnecessary history traversal
 
 ### **Benchmark Results**
-```
+
+```text
 Typical Performance (100+ repositories):
 ├── Processing Time: 2-5 minutes
 ├── Memory Usage: 45-120MB peak
 ├── Disk I/O: 1-5GB scanned
-├── Success Rate: 99.5%+ 
-└── Cache Hit Rate: 85%+ on subsequent runs
+├── Success Rate: 99.5%+
+└── Cache Hit Rate: 85%+ on repeat runs
 ```
 
 ---
@@ -246,19 +274,23 @@ Typical Performance (100+ repositories):
 ## 🔧 Deployment & Testing
 
 ### **Local Testing**
+
 ```bash
 # Test configuration validation
-python generate_reports.py --project ONAP --repos-path ./test-repos --validate-only
+python generate_reports.py --project ONAP --repos-path ./test-repos --check-config
 
 # Test full analysis
 python generate_reports.py --project ONAP --repos-path ./test-repos --verbose
 
 # Test specific project config
-python generate_reports.py --project O-RAN-SC --config-dir ./configuration --repos-path ./test-repos
+python generate_reports.py --project O-RAN-SC \
+  --config-dir ./configuration --repos-path ./test-repos
 ```
 
 ### **Workflow Testing**
-The workflow includes validation steps to catch issues early:
+
+The workflow includes checks to catch issues quickly:
+
 1. **Configuration validation** - JSON structure and required fields
 2. **Repository validation** - Data availability before analysis
 3. **Analytics validation** - Error handling and reporting
@@ -271,53 +303,61 @@ The workflow includes validation steps to catch issues early:
 ### **For Workflow Maintainers**
 
 #### **No Action Required**
+
 The integration is backward-compatible:
+
 - ✅ **Same trigger conditions** (workflow_dispatch, scheduled)
 - ✅ **Same input format** (PROJECTS_JSON variable)
 - ✅ **Same artifact structure** (enhanced with more content)
 - ✅ **Same security model** (hardened runner, minimal permissions)
 
 #### **Optional Enhancements**
+
 Consider these improvements for your specific use case:
 
 1. **Custom project configurations**
-```yaml
-# Add project-specific settings
-configuration/
-└── YOUR_PROJECT.config
-```
+
+   ```yaml
+   # Add project-specific settings
+   configuration/
+   └── YOUR_PROJECT.config
+   ```
 
 2. **Enhanced scheduling**
-```yaml
-# More frequent reports for active projects
-schedule:
-  - cron: '0 7 * * 1,4'  # Monday and Thursday
-```
+
+   ```yaml
+   # More frequent reports for active projects
+   schedule:
+     - cron: '0 7 * * 1,4'  # Monday and Thursday
+   ```
 
 3. **Artifact retention**
-```yaml
-# Longer retention for important projects
-retention-days: 90
-```
+
+   ```yaml
+   # Longer retention for important projects
+   retention-days: 90
+   ```
 
 ### **For Report Consumers**
 
 #### **New Artifact Structure**
-```
+
+```text
 Old: analysis-output-PROJECT.json
 New: reports-PROJECT/
      ├── PROJECT/report_raw.json     # Enhanced JSON data
      ├── PROJECT/report.md           # Human-readable report
-     ├── PROJECT/report.html         # Styled web report  
+     ├── PROJECT/report.html         # Styled web report
      └── PROJECT/PROJECT_bundle.zip  # Complete package
 ```
 
 #### **Enhanced Data Available**
+
 - ✅ **Contributor analytics** with organization mapping
 - ✅ **Feature detection** results across repositories
 - ✅ **Activity trends** and aging analysis
 - ✅ **Performance metrics** and repository health
-- ✅ **Professional formatting** in multiple formats
+- ✅ **Professional formatting** in various formats
 
 ---
 
@@ -326,25 +366,29 @@ New: reports-PROJECT/
 ### **Common Issues**
 
 #### **"No repository data found"**
-```
+
+```text
 Cause: Gerrit clone action failed
 Solution: Check gerrit-clone-action logs for network/auth issues
 ```
 
 #### **"Analytics failed with exit code 1"**
-```
+
+```text
 Cause: Configuration or dependency issue
 Solution: Check Python dependencies and configuration syntax
 ```
 
 #### **"Partial results generated"**
-```
+
+```text
 Cause: Some repositories failed individual processing
 Status: ✅ Normal - system designed to continue on partial failures
 Action: Check error list in JSON output for specific repository issues
 ```
 
 ### **Debug Mode**
+
 ```bash
 # Enable detailed logging
 python generate_reports.py \
@@ -359,15 +403,17 @@ python generate_reports.py \
 ## 📋 Success Metrics
 
 ### **Integration Success Indicators**
+
 - ✅ **Workflow runs complete** without fatal errors
-- ✅ **Artifacts are generated** for all processed projects
-- ✅ **Reports contain comprehensive data** (not just repository counts)
+- ✅ **Artifacts exist** for all processed projects
+- ✅ **Reports contain comprehensive data** beyond repository counts
 - ✅ **Error rates are low** (<1% repository failures)
 - ✅ **Performance is acceptable** (<10 minutes for large projects)
 
 ### **Quality Indicators**
+
 - ✅ **Data accuracy** - Git metrics match repository state
-- ✅ **Feature detection** - CI/CD and documentation features correctly identified
+- ✅ **Feature detection** - CI/CD and documentation features identified
 - ✅ **Report formatting** - Professional appearance and readability
 - ✅ **Configuration application** - Project-specific settings properly applied
 
@@ -376,16 +422,18 @@ python generate_reports.py \
 ## 🎯 Next Steps
 
 ### **Immediate Actions**
-1. ✅ **Monitor first workflow runs** with new system
-2. ✅ **Validate generated reports** for data quality
+
+1. ✅ **Watch first workflow runs** with new system
+2. ✅ **Check generated reports** for data quality
 3. ✅ **Adjust project configurations** as needed
 4. ✅ **Share enhanced reports** with stakeholders
 
 ### **Future Enhancements**
+
 - 📊 **Dashboard integration** - Web-based report viewing
-- 📈 **Historical trending** - Compare reports over time  
+- 📈 **Historical trending** - Compare reports over time
 - 🔍 **Advanced analytics** - Code quality and security metrics
-- 🔄 **API integration** - GitHub/Gerrit API for additional data
+- 🔄 **API integration** - GitHub/Gerrit API for extra data
 - 📱 **Mobile optimization** - Responsive report layouts
 
 ---
@@ -393,14 +441,16 @@ python generate_reports.py \
 ## 📞 Support & Documentation
 
 ### **Resources**
+
 - **Implementation Documentation:** `REPORT_IMPLEMENTATION.md`
 - **Phase Completion Reports:** `PHASE1_COMPLETION.md` through `PHASE6_COMPLETION.md`
 - **Configuration Reference:** `configuration/template.config`
 - **Test Suite:** `test_phase*.py` (35+ tests available)
 
 ### **Getting Help**
+
 1. **Check logs** in GitHub Actions workflow runs
-2. **Validate configuration** using `--validate-only` mode
+2. **Check configuration** using `--check-config` mode
 3. **Run local tests** to isolate issues
 4. **Review error messages** in generated JSON reports
 5. **Consult completion reports** for implementation details
@@ -409,4 +459,6 @@ python generate_reports.py \
 
 **Integration Status:** ✅ **Complete and Production Ready**
 
-The Repository Reporting System is now fully integrated into the GitHub Actions workflow, providing comprehensive repository analytics with professional reporting capabilities for all projects.
+The Repository Reporting System is now fully integrated into the GitHub Actions
+workflow, providing comprehensive repository analytics with professional
+reporting capabilities for all projects.

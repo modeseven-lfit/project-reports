@@ -3,3 +3,6 @@
 
 # Core dependencies for Repository Reporting System
 PyYAML>=6.0
+
+# Development dependencies for type checking
+types-PyYAML>=6.0.12.20250915

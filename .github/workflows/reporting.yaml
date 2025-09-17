@@ -112,12 +112,12 @@ jobs:
 
       - name: "Checkout repository"
         # yamllint disable-line rule:line-length
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: "Clone Gerrit repositories for ${{ matrix.project }}"
         # Temporarily use fork until merged upstream
-        uses: modeseven-lfreleng-actions/gerrit-clone-action@main
-        # uses: lfit/gerrit-clone-action@main
+        # yamllint disable-line rule:line-length
+        uses: modeseven-lfreleng-actions/gerrit-clone-action@main # latest
         id: clone
         with:
           host: ${{ matrix.server }}
@@ -195,7 +195,8 @@ jobs:
           fi
 
       - name: "Set up Python environment for ${{ matrix.project }}"
-        uses: actions/setup-python@f677139bbe7f9c59b41e40162b753c062f5d49a3 # v5.2.0
+        # yamllint disable-line rule:line-length
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
         with:
           python-version: '3.11'
           cache: 'pip'
@@ -211,35 +212,43 @@ jobs:
         run: |
           project="${{ matrix.project }}"
           echo "🔍 Validating repository data for $project"
-          
+
           # Check if gerrit-repos directory exists and has content
           if [ ! -d "./gerrit-repos" ]; then
             echo "❌ No repository data found - gerrit-repos directory missing"
-            echo "## ❌ Analysis Failed for $project" >> "$GITHUB_STEP_SUMMARY"
-            echo "**Reason:** No repository data available (clone may have failed)" >> "$GITHUB_STEP_SUMMARY"
+            {
+              echo "## ❌ Analysis Failed for $project"
+              # yamllint disable-line rule:line-length
+              echo "**Reason:** No repository data (clone may have failed)"
+            } >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
-          
+
           # Count actual repositories (exclude hidden dirs and files)
-          repo_count=$(find ./gerrit-repos -maxdepth 1 -type d -not -name ".*" -not -name "gerrit-repos" | wc -l)
-          
+          # yamllint disable-line rule:line-length
+          repo_count=$(find ./gerrit-repos -maxdepth 1 -type d \
+            -not -name ".*" -not -name "gerrit-repos" | wc -l)
+
           if [ "$repo_count" -eq 0 ]; then
-            echo "❌ No repositories found in gerrit-repos directory"
-            echo "## ❌ Analysis Failed for $project" >> "$GITHUB_STEP_SUMMARY"
-            echo "**Reason:** No repositories available for analysis" >> "$GITHUB_STEP_SUMMARY"
+            {
+              echo "## ❌ Analysis Failed for $project"
+              echo "**Reason:** No repositories available for analysis"
+            } >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
-          
+
           echo "✅ Found $repo_count repositories to analyze"
-          echo "## 🔍 Repository Validation for $project" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Repositories found:** $repo_count" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "## 🔍 Repository Validation for $project"
+            echo "- **Repositories found:** $repo_count"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: "Run comprehensive analytics for ${{ matrix.project }}"
         shell: bash
         run: |
           project="${{ matrix.project }}"
           echo "📊 Starting comprehensive analytics for $project"
-          
+
           # Execute the comprehensive reporting system with error handling
           if python3 generate_reports.py \
             --project "$project" \
@@ -247,38 +256,49 @@ jobs:
             --config-dir "./configuration" \
             --output-dir "./reports" \
             --verbose; then
-            
+
             echo "✅ Analytics completed successfully for $project"
-            
+
             # Report on generated files
             report_dir="./reports/$project"
             if [ -d "$report_dir" ]; then
-              echo "## 📊 Analytics Success for $project" >> "$GITHUB_STEP_SUMMARY"
-              echo "**Status:** ✅ Report generation completed" >> "$GITHUB_STEP_SUMMARY"
-              echo "" >> "$GITHUB_STEP_SUMMARY"
-              
+              {
+                echo "## 📊 Analytics Success for $project"
+                # yamllint disable-line rule:line-length
+                echo "**Status:** ✅ Report generation completed"
+                echo ""
+              } >> "$GITHUB_STEP_SUMMARY"
+
               # List generated files with sizes
               echo "### Generated Files:" >> "$GITHUB_STEP_SUMMARY"
               for file in "$report_dir"/*; do
                 if [ -f "$file" ]; then
                   filename=$(basename "$file")
-                  size=$(stat -f%z "$file" 2>/dev/null || stat -c%s "$file" 2>/dev/null || echo "N/A")
-                  echo "- **$filename:** ${size} bytes" >> "$GITHUB_STEP_SUMMARY"
+                  # yamllint disable-line rule:line-length
+                  size=$(stat -f%z "$file" 2>/dev/null || \
+                    stat -c%s "$file" 2>/dev/null || echo "N/A")
+                  # yamllint disable-line rule:line-length
+                  echo "- **$filename:** ${size} bytes" \
+                    >> "$GITHUB_STEP_SUMMARY"
                 fi
               done
             fi
           else
             exit_code=$?
             echo "❌ Analytics failed for $project (exit code: $exit_code)"
-            echo "## ❌ Analytics Failed for $project" >> "$GITHUB_STEP_SUMMARY"
-            echo "**Status:** Failed with exit code $exit_code" >> "$GITHUB_STEP_SUMMARY"
-            echo "**Recommendation:** Check logs for detailed error information" >> "$GITHUB_STEP_SUMMARY"
+            {
+              echo "## ❌ Analytics Failed for $project"
+              echo "**Status:** Failed with exit code $exit_code"
+              # yamllint disable-line rule:line-length
+              echo "**Recommendation:** Check logs for error information"
+            } >> "$GITHUB_STEP_SUMMARY"
             exit $exit_code
           fi
 
       - name: "Upload comprehensive analysis results"
         if: always()
-        uses: actions/upload-artifact@v4
+        # yamllint disable-line rule:line-length
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
         with:
           name: reports-${{ matrix.project }}
           path: |
@@ -304,7 +324,7 @@ jobs:
 
       - name: "Download all analysis results"
         # yamllint disable-line rule:line-length
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
         with:
           pattern: reports-*
           path: ./results
@@ -320,10 +340,9 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
           # Count results
-          result_count=$(find ./results -name "reports-*" \
-            -type d | wc -l)
+          result_count=$(find ./results -name "reports-*" -type d | wc -l)
           {
-            echo "**Comprehensive reports generated:** $result_count project(s) processed"
+            echo "** Reports generated:** $result_count project(s) processed"
             echo ""
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -334,31 +353,44 @@ jobs:
               if [ -d "$result_dir" ]; then
                 project_name=$(basename "$result_dir" | sed 's/reports-//')
                 echo "#### ✅ $project_name" >> "$GITHUB_STEP_SUMMARY"
-                
+
                 # Check for report files and show what was generated
                 project_reports_dir="$result_dir/$project_name"
                 if [ -d "$project_reports_dir" ]; then
                   echo "**Generated Files:**" >> "$GITHUB_STEP_SUMMARY"
-                  
+
                   if [ -f "$project_reports_dir/report_raw.json" ]; then
-                    size=$(stat -f%z "$project_reports_dir/report_raw.json" 2>/dev/null || stat -c%s "$project_reports_dir/report_raw.json" 2>/dev/null || echo "N/A")
-                    echo "- 📄 JSON Report: ${size} bytes" >> "$GITHUB_STEP_SUMMARY"
+                    size=$(stat -f%z "$project_reports_dir/report_raw.json" \
+                      2>/dev/null \
+                      || stat -c%s "$project_reports_dir/report_raw.json" \
+                        >/dev/null || echo "N/A")
+                    echo "- 📄 JSON Report: ${size} bytes" \
+                      >> "$GITHUB_STEP_SUMMARY"
                   fi
-                  
+
                   if [ -f "$project_reports_dir/report.md" ]; then
-                    echo "- 📝 Markdown Report: Generated" >> "$GITHUB_STEP_SUMMARY"
+                    echo "- 📝 Markdown Report: Generated" \
+                      >> "$GITHUB_STEP_SUMMARY"
                   fi
-                  
+
                   if [ -f "$project_reports_dir/report.html" ]; then
-                    echo "- 🌐 HTML Report: Generated" >> "$GITHUB_STEP_SUMMARY"
+                    echo "- 🌐 HTML Report: Generated" \
+                      >> "$GITHUB_STEP_SUMMARY"
                   fi
-                  
-                  if [ -f "$project_reports_dir"/*_report_bundle.zip ]; then
-                    bundle_size=$(stat -f%z "$project_reports_dir"/*_report_bundle.zip 2>/dev/null || stat -c%s "$project_reports_dir"/*_report_bundle.zip 2>/dev/null || echo "N/A")
-                    echo "- 📦 ZIP Bundle: ${bundle_size} bytes" >> "$GITHUB_STEP_SUMMARY"
-                  fi
+
+                  for bundle in "$project_reports_dir"/*_report_bundle.zip; do
+                    if [ -f "$bundle" ]; then
+                      bundle_size=$(stat -f%z "$bundle" 2>/dev/null \
+                        || stat -c%s "$bundle" 2>/dev/null \
+                        || echo "N/A")
+                      echo "- 📦 ZIP Bundle: ${bundle_size} bytes" \
+                        >> "$GITHUB_STEP_SUMMARY"
+                      break  # Only report the first bundle found
+                    fi
+                  done
                 else
-                  echo "- ⚠️ Report directory not found" >> "$GITHUB_STEP_SUMMARY"
+                  echo "- ⚠️ Report directory not found" \
+                    >> "$GITHUB_STEP_SUMMARY"
                 fi
                 echo "" >> "$GITHUB_STEP_SUMMARY"
               fi

@@ -38,10 +38,10 @@ import threading
 import zipfile
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, Union, DefaultDict
 
 try:
-    import yaml
+    import yaml  # type: ignore
 except ImportError:
     print("ERROR: PyYAML is required. Install with: pip install PyYAML", file=sys.stderr)
     sys.exit(1)
@@ -218,7 +218,7 @@ class GitDataCollector:
         self.logger.debug(f"Collecting Git metrics for {repo_name}")
 
         # Initialize metrics structure
-        metrics = {
+        metrics: Dict[str, Any] = {
             "repository": {
                 "name": repo_name,
                 "path": str(repo_path),
@@ -227,17 +227,19 @@ class GitDataCollector:
                 "is_active": False,
                 "commit_counts": {window: 0 for window in self.time_windows},
                 "loc_stats": {window: {"added": 0, "removed": 0, "net": 0} for window in self.time_windows},
-                "unique_contributors": {window: set() for window in self.time_windows},
+                "unique_contributors": {window: set() for window in self.time_windows},  # type: ignore
                 "features": {},
             },
             "authors": {},  # email -> author metrics
-            "errors": [],
+            "errors": []  # List[str]
         }
 
         try:
             # Check if this is actually a git repository
             if not (repo_path / ".git").exists():
-                metrics["errors"].append(f"Not a git repository: {repo_path}")
+                errors_list = metrics["errors"]
+                assert isinstance(errors_list, list)
+                errors_list.append(f"Not a git repository: {repo_path}")
                 return metrics
 
             # Check cache if enabled
@@ -274,8 +276,12 @@ class GitDataCollector:
             self._finalize_repo_metrics(metrics, repo_name)
 
             # Convert sets to counts for JSON serialization
+            repo_data = metrics["repository"]
+            unique_contributors = repo_data["unique_contributors"]
             for window in self.time_windows:
-                metrics["repository"]["unique_contributors"][window] = len(metrics["repository"]["unique_contributors"][window])
+                contributor_set = unique_contributors[window]
+                assert isinstance(contributor_set, set)
+                unique_contributors[window] = len(contributor_set)
 
             self.logger.debug(f"Collected {len(commits_data)} commits for {repo_name}")
 
@@ -285,7 +291,9 @@ class GitDataCollector:
 
         except Exception as e:
             self.logger.error(f"Error collecting Git metrics for {repo_name}: {e}")
-            metrics["errors"].append(f"Unexpected error: {str(e)}")
+            errors_list = metrics["errors"]
+            assert isinstance(errors_list, list)
+            errors_list.append(f"Unexpected error: {str(e)}")
 
         return metrics
 
@@ -382,11 +390,10 @@ class GitDataCollector:
                     "subject": parts[4] if len(parts) > 4 else "",
                     "files_changed": []
                 }
-
-            # Check if this is a numstat line (added/removed/filename)
-            elif current_commit and '\t' in line:
-                parts = line.split('\t', 2)
-                if len(parts) >= 3:
+            else:
+                # Parse numstat lines (format: added<tab>removed<tab>filename)
+                parts = line.split('\t')
+                if len(parts) >= 3 and current_commit:
                     try:
                         # Handle binary files (marked with -)
                         added = 0 if parts[0] == '-' else int(parts[0])
@@ -398,13 +405,15 @@ class GitDataCollector:
                             if parts[0] == '-' or parts[1] == '-':
                                 continue
 
-                        current_commit["files_changed"].append({
+                        files_changed = current_commit["files_changed"]
+                        assert isinstance(files_changed, list)
+                        files_changed.append({
                             "filename": filename,
                             "added": added,
-                            "removed": removed
+                            "removed": removed,
                         })
                     except (ValueError, IndexError):
-                        # Skip malformed numstat lines
+                        # Skip malformed lines
                         continue
 
         # Don't forget the last commit
@@ -443,7 +452,7 @@ class GitDataCollector:
                 "domain": author_info["domain"],
                 "commit_counts": {window: 0 for window in self.time_windows},
                 "loc_stats": {window: {"added": 0, "removed": 0, "net": 0} for window in self.time_windows},
-                "repositories": {window: set() for window in self.time_windows},
+                "repositories": {window: set() for window in self.time_windows},  # type: ignore
             }
 
         # Update author metrics for each matching window
@@ -588,7 +597,7 @@ class FeatureRegistry:
     def __init__(self, config: Dict[str, Any], logger: logging.Logger):
         self.config = config
         self.logger = logger
-        self.checks = {}
+        self.checks: Dict[str, Any] = {}
         self._register_default_checks()
 
     def register(self, feature_name: str, check_function):
@@ -653,7 +662,7 @@ class FeatureRegistry:
             "github2gerrit", "gerrit-review", "gerrit-submit"
         ]
 
-        matching_workflows = []
+        matching_workflows: List[Dict[str, str]] = []
         try:
             for workflow_file in workflows_dir.glob("*.yml"):
                 try:
@@ -661,7 +670,7 @@ class FeatureRegistry:
                         content = f.read().lower()
                         for pattern in gerrit_patterns:
                             if pattern in content:
-                                matching_workflows.append({
+                                matching_workflows.append({  # type: ignore
                                     "file": workflow_file.name,
                                     "pattern": pattern
                                 })
@@ -676,7 +685,7 @@ class FeatureRegistry:
                         content = f.read().lower()
                         for pattern in gerrit_patterns:
                             if pattern in content:
-                                matching_workflows.append({
+                                matching_workflows.append({  # type: ignore
                                     "file": workflow_file.name,
                                     "pattern": pattern
                                 })
@@ -720,7 +729,7 @@ class FeatureRegistry:
                     # Count number of repos/hooks (basic analysis)
                     import re
                     repos_count = len(re.findall(r'^\s*-\s*repo:', content, re.MULTILINE))
-                    result["repos_count"] = repos_count
+                    result["repos_count"] = repos_count  # type: ignore
             except (IOError, UnicodeDecodeError):
                 pass
 
@@ -894,7 +903,7 @@ class FeatureRegistry:
 
     def _analyze_workflow_file(self, workflow_file: Path, verify_patterns: List[str], merge_patterns: List[str]) -> Dict[str, Any]:
         """Analyze a single workflow file for classification."""
-        workflow_info = {
+        workflow_info: Dict[str, Any] = {
             "name": workflow_file.name,
             "classification": "other",
             "triggers": [],
@@ -946,9 +955,13 @@ class FeatureRegistry:
                 else:
                     # Try alternative format
                     if 'on: push' in content:
-                        workflow_info["triggers"].append('push')
+                        triggers_list = workflow_info["triggers"]
+                        assert isinstance(triggers_list, list)
+                        triggers_list.append('push')
                     if 'on: pull_request' in content:
-                        workflow_info["triggers"].append('pull_request')
+                        triggers_list = workflow_info["triggers"]
+                        assert isinstance(triggers_list, list)
+                        triggers_list.append('pull_request')
 
                 # Count jobs
                 job_matches = re.findall(r'^\s*(\w+):\s*$', content, re.MULTILINE)
@@ -1007,7 +1020,9 @@ class DataAggregator:
         total_commits = 0
 
         for repo in repo_metrics:
-            days_since_last = repo.get("days_since_last_commit", 0)
+            days_since_last = repo.get("days_since_last_commit")
+            if days_since_last is None:
+                days_since_last = float('inf')  # Treat None as very old
             is_active = days_since_last <= activity_threshold_days
 
             # Count total commits
@@ -1020,14 +1035,17 @@ class DataAggregator:
 
                 # Categorize inactive repositories by age
                 days_to_years = 365.25
-                age_years = days_since_last / days_to_years
-
-                if age_years > very_old_years:
+                if days_since_last == float('inf'):
+                    # Repositories with no commits go to very old
                     very_old_repos.append(repo)
-                elif age_years > old_years:
-                    old_repos.append(repo)
                 else:
-                    recent_inactive_repos.append(repo)
+                    age_years = days_since_last / days_to_years
+                    if age_years > very_old_years:
+                        very_old_repos.append(repo)
+                    elif age_years > old_years:
+                        old_repos.append(repo)
+                    else:
+                        recent_inactive_repos.append(repo)
 
         # Aggregate author and organization data
         self.logger.info("Computing author rollups")
@@ -1086,9 +1104,9 @@ class DataAggregator:
                 "total_organizations": len(organizations),
             },
             "activity_distribution": {
-                "very_old": [{"name": r.get("name", ""), "days_since_last_commit": r.get("days_since_last_commit", 0)} for r in very_old_repos],
-                "old": [{"name": r.get("name", ""), "days_since_last_commit": r.get("days_since_last_commit", 0)} for r in old_repos],
-                "recent_inactive": [{"name": r.get("name", ""), "days_since_last_commit": r.get("days_since_last_commit", 0)} for r in recent_inactive_repos],
+                "very_old": [{"name": r.get("name", ""), "days_since_last_commit": r.get("days_since_last_commit") if r.get("days_since_last_commit") is not None else 999999} for r in very_old_repos],
+                "old": [{"name": r.get("name", ""), "days_since_last_commit": r.get("days_since_last_commit") if r.get("days_since_last_commit") is not None else 999999} for r in old_repos],
+                "recent_inactive": [{"name": r.get("name", ""), "days_since_last_commit": r.get("days_since_last_commit") if r.get("days_since_last_commit") is not None else 999999} for r in recent_inactive_repos],
             },
             "top_active_repositories": top_active,
             "least_active_repositories": least_active,
@@ -1109,7 +1127,8 @@ class DataAggregator:
         Merges author data by email address, summing metrics across all repos
         and tracking unique repositories touched per time window.
         """
-        author_aggregates = defaultdict(lambda: {
+        from collections import defaultdict
+        author_aggregates: DefaultDict[str, Dict[str, Any]] = defaultdict(lambda: {
             "name": "",
             "email": "",
             "username": "",
@@ -1173,7 +1192,8 @@ class DataAggregator:
 
         Groups authors by email domain and aggregates their contributions.
         """
-        org_aggregates = defaultdict(lambda: {
+        from collections import defaultdict
+        org_aggregates: DefaultDict[str, Dict[str, Any]] = defaultdict(lambda: {
             "domain": "",
             "contributor_count": 0,
             "contributors": set(),
@@ -1454,14 +1474,19 @@ class ReportRenderer:
             return "*No repositories in this category.*"
 
         # Sort by days since last commit (descending)
-        sorted_repos = sorted(repos, key=lambda x: x.get("days_since_last_commit", 0), reverse=True)
+        def sort_key(x):
+            days = x.get("days_since_last_commit")
+            return days if days is not None else 999999
+        sorted_repos = sorted(repos, key=sort_key, reverse=True)
 
         lines = ["| Repository | Days Inactive | Last Activity |",
                  "|------------|---------------|---------------|"]
 
         for repo in sorted_repos[:20]:  # Limit to top 20
             name = repo.get("name", "Unknown")
-            days = repo.get("days_since_last_commit", 0)
+            days = repo.get("days_since_last_commit")
+            if days is None:
+                days = 999999  # Very large number for repos with no commits
             age_str = self._format_age(days)
             lines.append(f"| {name} | {days:,} | {age_str} |")
 
@@ -1487,7 +1512,9 @@ class ReportRenderer:
             commits_1y = repo.get("commit_counts", {}).get("last_365_days", 0)
             loc_1y = repo.get("loc_stats", {}).get("last_365_days", {}).get("net", 0)
             contributors_1y = repo.get("unique_contributors", {}).get("last_365_days", 0)
-            days_since = repo.get("days_since_last_commit", 0)
+            days_since = repo.get("days_since_last_commit")
+            if days_since is None:
+                days_since = 999999  # Very large number for repos with no commits
             is_active = repo.get("is_active", False)
 
             age_str = self._format_age(days_since)
@@ -1511,7 +1538,9 @@ class ReportRenderer:
 
         for repo in least_active:
             name = repo.get("name", "Unknown")
-            days_since = repo.get("days_since_last_commit", 0)
+            days_since = repo.get("days_since_last_commit")
+            if days_since is None:
+                days_since = 999999  # Very large number for repos with no commits
             commits_1y = repo.get("commit_counts", {}).get("last_365_days", 0)
             age_str = self._format_age(days_since)
 
@@ -1916,44 +1945,7 @@ class ReportRenderer:
             years = days // 365
             return f"{years} year{'s' if years != 1 else ''} ago"
 
-    def _generate_markdown_content(self, data: Dict[str, Any]) -> str:
-        """Generate complete Markdown content from JSON data."""
-        include_sections = self.config.get("output", {}).get("include_sections", {})
 
-        sections = []
-
-        # Title and metadata
-        sections.append(self._generate_title_section(data))
-
-        # Global summary
-        sections.append(self._generate_summary_section(data))
-
-        # Activity distribution
-        if include_sections.get("inactive_distributions", True):
-            sections.append(self._generate_activity_distribution_section(data))
-
-        # Top active repositories
-        sections.append(self._generate_top_repositories_section(data))
-
-        # Least active repositories
-        sections.append(self._generate_least_active_repositories_section(data))
-
-        # Contributors
-        if include_sections.get("contributors", True):
-            sections.append(self._generate_contributors_section(data))
-
-        # Organizations
-        if include_sections.get("organizations", True):
-            sections.append(self._generate_organizations_section(data))
-
-        # Repository feature matrix
-        if include_sections.get("repo_feature_matrix", True):
-            sections.append(self._generate_feature_matrix_section(data))
-
-        # Appendix
-        sections.append(self._generate_appendix_section(data))
-
-        return "\n\n".join(sections)
 
 # =============================================================================
 # PACKAGING AND ZIP CREATION (Phase 5)
@@ -2084,7 +2076,7 @@ class RepositoryReporter:
             "authors": [],
             "organizations": [],
             "summaries": {},
-            "errors": [],
+            "errors": []
         }
 
         # Update git collector with time windows
