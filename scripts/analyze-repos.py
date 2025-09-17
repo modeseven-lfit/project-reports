@@ -49,14 +49,19 @@ def process_manifest(manifest_path):
 
         print("📋 Clone Summary:")
         print(f"   - Total repositories: {total_repos}")
-        print(f"   - Successfully cloned: {successful_clones}")
-        print(f"   - Failed clones: {failed_clones}")
 
-        write_to_summary(
-            f"- **Total Repositories:** {total_repos}\n"
-            f"- **Successfully Cloned:** {successful_clones}\n"
-            f"- **Failed Clones:** {failed_clones}\n"
-        )
+        # Only show clone success/failure details if there were failures
+        if successful_clones != total_repos:
+            print(f"   - Successfully cloned: {successful_clones}")
+            print(f"   - Failed clones: {failed_clones}")
+
+            write_to_summary(
+                f"- **Total Repositories:** {total_repos}\n"
+                f"- **Successfully Cloned:** {successful_clones}\n"
+                f"- **Failed Clones:** {failed_clones}\n"
+            )
+        else:
+            write_to_summary(f"- **Total Repositories:** {total_repos}\n")
     except (json.JSONDecodeError, IOError) as e:
         print(f"⚠️  Warning: Could not read clone manifest: {e}")
         write_to_summary("- **Manifest Status:** ⚠️  Could not read manifest file\n")
@@ -129,14 +134,12 @@ def main():
     # Print basic information
     print(f"🔍 Analyzing repositories for project: {args.project}")
     print(f"📡 Gerrit server: {args.server}")
-    print(f"📁 Repository path: {args.repos_path}")
 
     # Write to GitHub Step Summary
     write_to_summary(
         f"## 📊 Analysis Results for {args.project}\n\n"
         f"- **Project:** {args.project}\n"
         f"- **Gerrit Server:** {args.server}\n"
-        f"- **Repository Path:** {args.repos_path}\n"
     )
 
     # Validate repository path
