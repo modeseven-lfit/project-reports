@@ -1134,14 +1134,6 @@ class FeatureRegistry:
                 "details": [{"type": "jjb", "files": ["repository_name"], "confidence": 100}]
             }
 
-        # Check for documentation repositories
-        if self._is_documentation_repository(repo_path):
-            return {
-                "detected_types": ["documentation"],
-                "primary_type": "documentation",
-                "details": [{"type": "documentation", "files": self._get_doc_indicators(repo_path), "confidence": 90}]
-            }
-
         project_types = {
             "maven": ["pom.xml"],
             "gradle": ["build.gradle", "build.gradle.kts", "gradle.properties", "settings.gradle"],
@@ -1192,6 +1184,14 @@ class FeatureRegistry:
         if detected_types:
             primary_type = max(confidence_scores.items(), key=lambda x: x[1])[0]
 
+        # If no programming language detected, check for documentation as fallback
+        if not detected_types and self._is_documentation_repository(repo_path):
+            return {
+                "detected_types": ["documentation"],
+                "primary_type": "documentation",
+                "details": [{"type": "documentation", "files": self._get_doc_indicators(repo_path), "confidence": 50}]
+            }
+
         return {
             "detected_types": [t["type"] for t in detected_types],
             "primary_type": primary_type,
@@ -1199,17 +1199,21 @@ class FeatureRegistry:
         }
 
     def _is_documentation_repository(self, repo_path: Path) -> bool:
-        """Determine if a repository is primarily for documentation."""
+        """Determine if a repository is primarily for documentation (fallback only)."""
         repo_name = repo_path.name.lower()
 
-        # Check repository name patterns
-        doc_name_patterns = ["doc", "docs", "documentation", "manual", "wiki", "guide", "tutorial"]
-        if any(pattern in repo_name for pattern in doc_name_patterns):
+        # Only classify as documentation if repository name strongly indicates it
+        strong_doc_patterns = ["documentation", "manual", "wiki", "guide", "tutorial"]
+        if any(repo_name == pattern or repo_name.endswith(f"-{pattern}") for pattern in strong_doc_patterns):
             return True
 
-        # Check directory structure and file patterns
+        # For repos named exactly "doc" or "docs"
+        if repo_name in ["doc", "docs"]:
+            return True
+
+        # Check directory structure and file patterns - be more restrictive
         doc_indicators = self._get_doc_indicators(repo_path)
-        return len(doc_indicators) >= 3  # Require multiple indicators
+        return len(doc_indicators) >= 5  # Require more indicators for stronger confidence
 
     def _get_doc_indicators(self, repo_path: Path) -> list[str]:
         """Get list of documentation indicators found in the repository."""
