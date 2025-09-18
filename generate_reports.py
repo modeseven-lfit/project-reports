@@ -596,41 +596,104 @@ class GitDataCollector:
         except Exception as e:
             self.logger.error(f"Failed to fetch Gerrit projects: {e}")
 
-    def _get_gerrit_project_name(self, repo_path: Path) -> str:
+    def _extract_gerrit_project(self, repo_path: Path) -> str:
         """
-        Derive the full Gerrit project name from the repository path.
+        Extract the hierarchical Gerrit project name from the repository path.
 
-        For paths like /path/to/gerrit-repos-project/aal/mgmt,
-        returns 'aal/mgmt' (the full Gerrit hierarchy).
+        For paths containing hostname patterns like:
+        /path/to/gerrit.o-ran-sc.org/aiml-fw/aihp/tps/kserve-adapter
+        returns 'aiml-fw/aihp/tps/kserve-adapter' (the full Gerrit project hierarchy).
 
-        If the path structure doesn't match expected Gerrit layout,
-        falls back to just the repository folder name.
+        Falls back to repository folder name if no hierarchical structure is detected.
         """
         try:
-            # Find the gerrit-repos-* directory in the path hierarchy
             path_parts = repo_path.parts
-            gerrit_root_idx = None
 
+            # Strategy 1: Look for gerrit-repos-* directory pattern
             for i, part in enumerate(path_parts):
                 if part.startswith('gerrit-repos-'):
-                    gerrit_root_idx = i
+                    if i < len(path_parts) - 1:
+                        project_path_parts = path_parts[i + 1:]
+                        gerrit_project = '/'.join(project_path_parts)
+                        self.logger.debug(f"Extracted Gerrit project from gerrit-repos pattern: {gerrit_project}")
+                        return gerrit_project
                     break
 
-            if gerrit_root_idx is not None and gerrit_root_idx < len(path_parts) - 1:
-                # Extract the project path relative to the gerrit-repos-* directory
-                project_path_parts = path_parts[gerrit_root_idx + 1:]
-                gerrit_project_name = '/'.join(project_path_parts)
+            # Strategy 2: Look for hostname pattern (gerrit.domain.tld)
+            for i, part in enumerate(path_parts):
+                if '.' in part and any(tld in part for tld in ['.org', '.com', '.net', '.io']):
+                    if i < len(path_parts) - 1:
+                        project_path_parts = path_parts[i + 1:]
+                        gerrit_project = '/'.join(project_path_parts)
+                        self.logger.debug(f"Extracted Gerrit project from hostname pattern: {gerrit_project}")
+                        return gerrit_project
+                    break
 
-                self.logger.debug(f"Derived Gerrit project name: {gerrit_project_name} from {repo_path}")
-                return gerrit_project_name
-            else:
-                # Fallback: no gerrit-repos-* directory found, use folder name
-                self.logger.debug(f"No gerrit-repos-* directory found in path {repo_path}, using folder name")
-                return repo_path.name
+            # Strategy 3: Check if any parent directories suggest hierarchical structure
+            # Look for common Gerrit project patterns (2+ levels deep)
+            # Filter out root directory from path_parts
+            meaningful_parts = [part for part in path_parts if part and part != '/']
+            if len(meaningful_parts) >= 3:
+                # Take last 2-4 path components as potential project hierarchy
+                for depth in range(4, 1, -1):  # Try 4, 3, 2 components
+                    if len(meaningful_parts) >= depth:
+                        potential_project = '/'.join(meaningful_parts[-depth:])
+                        # Validate it looks like a hierarchical project (has slashes, reasonable length)
+                        if '/' in potential_project and len(potential_project.split('/')) >= 2:
+                            self.logger.debug(f"Extracted Gerrit project from path depth {depth}: {potential_project}")
+                            return potential_project
+
+            # Fallback: use just the repository folder name
+            self.logger.debug(f"No hierarchical structure detected, using folder name: {repo_path.name}")
+            return repo_path.name
 
         except Exception as e:
-            self.logger.warning(f"Error deriving Gerrit project name from {repo_path}: {e}")
+            self.logger.warning(f"Error extracting Gerrit project from {repo_path}: {e}")
             return repo_path.name
+
+    def _derive_gerrit_url(self, repo_path: Path) -> str:
+        """
+        Derive the full Gerrit URL from the repository path.
+
+        Extracts hostname and project path to create URL like:
+        gerrit.o-ran-sc.org/aiml-fw/aihp/tps/kserve-adapter
+        """
+        try:
+            path_parts = repo_path.parts
+
+            # Look for hostname pattern and construct URL-style path
+            for i, part in enumerate(path_parts):
+                if '.' in part and any(tld in part for tld in ['.org', '.com', '.net', '.io']):
+                    hostname = part
+                    if i < len(path_parts) - 1:
+                        project_parts = path_parts[i + 1:]
+                        gerrit_url = f"{hostname}/{'/'.join(project_parts)}"
+                        self.logger.debug(f"Derived Gerrit URL: {gerrit_url}")
+                        return gerrit_url
+                    else:
+                        return hostname
+
+            # Fallback: construct generic URL with repo name only (avoid recursive issues)
+            repo_name = repo_path.name
+            fallback_url = f"unknown-gerrit-host/{repo_name}"
+            self.logger.warning(f"Could not detect Gerrit hostname, using fallback: {fallback_url}")
+            return fallback_url
+
+        except Exception as e:
+            self.logger.warning(f"Error deriving Gerrit URL from {repo_path}: {e}")
+            return str(repo_path)
+
+    def _extract_gerrit_host(self, repo_path: Path) -> str:
+        """Extract the Gerrit hostname from the repository path."""
+        try:
+            path_parts = repo_path.parts
+            for part in path_parts:
+                if '.' in part and any(tld in part for tld in ['.org', '.com', '.net', '.io']):
+                    return part
+            return "unknown-gerrit-host"
+        except Exception as e:
+            self.logger.warning(f"Error extracting Gerrit host from {repo_path}: {e}")
+            return "unknown-gerrit-host"
 
 
 
@@ -651,14 +714,22 @@ class GitDataCollector:
         Collects: timestamps, author name/email, added/removed lines.
         Returns structured metrics or error descriptor.
         """
-        repo_name = self._get_gerrit_project_name(repo_path)
-        self.logger.debug(f"Collecting Git metrics for {repo_name}")
+        # Extract Gerrit project information
+        gerrit_project = self._extract_gerrit_project(repo_path)
+        gerrit_host = self._extract_gerrit_host(repo_path)
+        gerrit_url = self._derive_gerrit_url(repo_path)
 
-        # Initialize metrics structure
+        self.logger.debug(f"Collecting Git metrics for Gerrit project: {gerrit_project}")
+
+        # Initialize metrics structure with Gerrit-centric model
         metrics: Dict[str, Any] = {
             "repository": {
-                "name": repo_name,
-                "path": str(repo_path),
+                "gerrit_project": gerrit_project,  # PRIMARY identifier
+                "gerrit_host": gerrit_host,
+                "gerrit_url": gerrit_url,
+                "local_path": str(repo_path),  # Secondary, for internal use
+                "name": gerrit_project,  # Backward compatibility - maps to gerrit_project
+                "path": gerrit_url,      # Backward compatibility - maps to gerrit_url
                 "last_commit_timestamp": None,
                 "days_since_last_commit": None,
                 "is_active": False,
@@ -683,7 +754,7 @@ class GitDataCollector:
             if self.cache_enabled:
                 cached_metrics = self._load_from_cache(repo_path)
                 if cached_metrics:
-                    self.logger.debug(f"Using cached metrics for {repo_name}")
+                    self.logger.debug(f"Using cached metrics for {gerrit_project}")
                     return cached_metrics
 
             # Get git log with numstat in a single command
@@ -703,21 +774,21 @@ class GitDataCollector:
                 return metrics
 
             # Parse git log output
-            commits_data = self._parse_git_log_output(output, repo_name)
+            commits_data = self._parse_git_log_output(output, gerrit_project)
 
             # Process commits into time windows
             for commit_data in commits_data:
                 self._update_commit_metrics(commit_data, metrics)
 
             # Finalize repository metrics
-            self._finalize_repo_metrics(metrics, repo_name)
+            self._finalize_repo_metrics(metrics, gerrit_project)
 
             # Convert sets to counts for JSON serialization
             repo_data = metrics["repository"]
 
             # Add Jenkins job information if available
             if self.jenkins_client:
-                jenkins_jobs = self._get_jenkins_jobs_for_repo(repo_name)
+                jenkins_jobs = self._get_jenkins_jobs_for_repo(gerrit_project)
                 repo_data["jenkins"] = {
                     "jobs": jenkins_jobs,
                     "job_count": len(jenkins_jobs),
@@ -729,7 +800,7 @@ class GitDataCollector:
                 assert isinstance(contributor_set, set)
                 unique_contributors[window] = len(contributor_set)
 
-            self.logger.debug(f"Collected {len(commits_data)} commits for {repo_name}")
+            self.logger.debug(f"Collected {len(commits_data)} commits for {gerrit_project}")
 
             # Save to cache if enabled
             if self.cache_enabled:
@@ -738,7 +809,7 @@ class GitDataCollector:
             return metrics
 
         except Exception as e:
-            self.logger.error(f"Error collecting Git metrics for {repo_name}: {e}")
+            self.logger.error(f"Error collecting Git metrics for {gerrit_project}: {e}")
             errors_list = metrics["errors"]
             assert isinstance(errors_list, list)
             errors_list.append(f"Unexpected error: {str(e)}")
@@ -928,7 +999,7 @@ class GitDataCollector:
             author_metrics["loc_stats"][window]["added"] += total_added
             author_metrics["loc_stats"][window]["removed"] += total_removed
             author_metrics["loc_stats"][window]["net"] += net_lines
-            author_metrics["repositories"][window].add(metrics["repository"]["name"])
+            author_metrics["repositories"][window].add(metrics["repository"]["gerrit_project"])
 
     def _finalize_repo_metrics(self, metrics: dict[str, Any], repo_name: str) -> None:
         """Finalize repository metrics after processing all commits."""
@@ -938,7 +1009,7 @@ class GitDataCollector:
         if any(count > 0 for count in repo_metrics["commit_counts"].values()):
             # Find last commit date by looking at git log with limit 1
             git_command = ["git", "log", "-1", "--date=iso", "--pretty=format:%ad"]
-            success, output = safe_git_command(git_command, Path(repo_metrics["path"]), self.logger)
+            success, output = safe_git_command(git_command, Path(repo_metrics["local_path"]), self.logger)
 
             if success and output.strip():
                 try:
@@ -996,7 +1067,7 @@ class GitDataCollector:
             head_hash = output.strip()
             # Include time windows in cache key to invalidate when windows change
             windows_key = hashlib.sha256(json.dumps(self.time_windows, sort_keys=True).encode()).hexdigest()[:8]
-            project_name = self._get_gerrit_project_name(repo_path)
+            project_name = self._extract_gerrit_project(repo_path)
             # Replace path separators for cache key
             safe_project_name = project_name.replace('/', '_')
             return f"{safe_project_name}_{head_hash}_{windows_key}"
@@ -1026,7 +1097,7 @@ class GitDataCollector:
 
             # Validate cache structure
             if not isinstance(cached_data, dict) or "repository" not in cached_data:
-                project_name = self._get_gerrit_project_name(repo_path)
+                project_name = self._extract_gerrit_project(repo_path)
                 self.logger.warning(f"Invalid cache structure for {project_name}")
                 return None
 
@@ -1708,7 +1779,7 @@ class DataAggregator:
         sample_no_commit_repos: list[dict[str, Any]] = []
 
         for repo in repo_metrics:
-            repo_name = repo.get("name", "Unknown")
+            repo_name = repo.get("gerrit_project", repo.get("name", "Unknown"))
             commit_counts = repo.get("commit_counts", {})
 
             # Check if repository has any commits across all time windows
@@ -1757,7 +1828,7 @@ class DataAggregator:
 
         # Aggregate across all repositories
         for repo in repo_metrics:
-            repo_name = repo.get("name", "unknown")
+            repo_name = repo.get("gerrit_project", repo.get("name", "unknown"))
 
             # Process each author in this repository
             for author in repo.get("authors", []):
@@ -2151,7 +2222,7 @@ class ReportRenderer:
         from datetime import datetime, timedelta
 
         for repo in sorted_repos:  # Show all repositories, not just top 20
-            name = repo.get("name", "Unknown")
+            name = repo.get("gerrit_project", repo.get("name", "Unknown"))
             days = repo.get("days_since_last_commit")
             if days is None:
                 days = 999999  # Very large number for repos with no commits
@@ -2182,7 +2253,7 @@ class ReportRenderer:
                  "|------------|--------------|--------------|--------------|------------------|--------|"]
 
         for repo in top_repos:
-            name = repo.get("name", "Unknown")
+            name = repo.get("gerrit_project", repo.get("name", "Unknown"))
             commits_1y = repo.get("commit_counts", {}).get("last_365_days", 0)
             loc_1y = repo.get("loc_stats", {}).get("last_365_days", {}).get("net", 0)
             contributors_1y = repo.get("unique_contributors", {}).get("last_365_days", 0)
@@ -2218,7 +2289,7 @@ class ReportRenderer:
                  "|------------|---------------|-------------------|------------------|--------------|"]
 
         for repo in least_active:
-            name = repo.get("name", "Unknown")
+            name = repo.get("gerrit_project", repo.get("name", "Unknown"))
             days_since = repo.get("days_since_last_commit")
             if days_since is None:
                 days_since = 999999  # Very large number for repos with no commits
@@ -2258,7 +2329,7 @@ class ReportRenderer:
                  "|------------|"]
 
         for repo in no_commit_repos:
-            name = repo.get("name", "Unknown")
+            name = repo.get("gerrit_project", repo.get("name", "Unknown"))
             lines.append(f"| {name} |")
 
         lines.extend(["", f"**Total:** {len(no_commit_repos)} repositories with no commits"])
@@ -2282,7 +2353,7 @@ class ReportRenderer:
 
             if workflow_names or jenkins_job_names:
                 repos_with_cicd.append({
-                    "name": repo.get("name", "Unknown"),
+                    "name": repo.get("gerrit_project", repo.get("name", "Unknown")),
                     "workflow_names": workflow_names,
                     "jenkins_job_names": jenkins_job_names
                 })
@@ -2421,7 +2492,7 @@ class ReportRenderer:
                  "|------------|------|------------|------------|-------------|-----------|--------|"]
 
         for repo in sorted_repos:
-            name = repo.get("name", "Unknown")
+            name = repo.get("gerrit_project", repo.get("name", "Unknown"))
             features = repo.get("features", {})
             is_active = repo.get("is_active", False)
 
@@ -3036,7 +3107,7 @@ class RepositoryReporter:
                     git_dir = item / ".git"
                     if git_dir.exists():
                         # Derive Gerrit project name from path
-                        gerrit_project_name = self.git_collector._get_gerrit_project_name(item)
+                        gerrit_project_name = self.git_collector._extract_gerrit_project(item)
                         self.logger.debug(f"Found git repository: {gerrit_project_name} at {item.relative_to(repos_path)}")
 
                         # Validate against Gerrit API if available
