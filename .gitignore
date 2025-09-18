@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: 2025 The Linux Foundation
 
-gerrit-repos-o-ran-sc/
-gerrit-repos-onap/
-gerrit-repos-opendaylight/
+# Gerrit server directories (server-specific naming)
+gerrit.*/
+gerrit-repos*/
 reports/
 test-repos/sample-repo
 

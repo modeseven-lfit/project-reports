@@ -33,7 +33,7 @@ development practices.
 ```bash
 python3 generate_reports.py \
   --project "O-RAN-SC" \
-  --repos-path "./gerrit-repos" \
+  --repos-path "./gerrit.o-ran-sc.org" \
   --config-dir "./configuration" \
   --output-dir "./reports" \
   --verbose
@@ -47,7 +47,7 @@ steps:
     run: |
       python3 generate_reports.py \
         --project "${{ matrix.project }}" \
-        --repos-path "./gerrit-repos" \
+        --repos-path "./${{ matrix.server }}" \
         --config-dir "./configuration" \
         --output-dir "./reports" \
         --verbose

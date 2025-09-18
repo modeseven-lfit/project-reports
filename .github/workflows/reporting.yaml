@@ -121,7 +121,7 @@ jobs:
         id: clone
         with:
           host: ${{ matrix.server }}
-          path-prefix: "./gerrit-repos"
+          path-prefix: "./${{ matrix.server }}"
           skip-archived: "true"
           threads: "4"
           clone-timeout: "300"
@@ -148,7 +148,7 @@ jobs:
           # Execute the comprehensive reporting system
           python3 generate_reports.py \
             --project "$project" \
-            --repos-path "./gerrit-repos" \
+            --repos-path "./${{ matrix.server }}" \
             --config-dir "./configuration" \
             --output-dir "./reports" \
             --verbose
@@ -172,7 +172,7 @@ jobs:
             || echo "No project reports directory found"
 
           echo "Looking for clone manifest:"
-          ls -la ./gerrit-repos/clone-manifest.json \
+          ls -la "./${{ matrix.server }}/clone-manifest.json" \
             || echo "No clone manifest found"
 
           echo "All files in reports directory tree:"
@@ -185,7 +185,7 @@ jobs:
         uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
         with:
           name: clone-manifest-${{ matrix.project }}
-          path: ./gerrit-repos/clone-manifest.json
+          path: "./${{ matrix.server }}/clone-manifest.json"
           retention-days: 30
           if-no-files-found: warn
 

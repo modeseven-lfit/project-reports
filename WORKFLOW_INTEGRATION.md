@@ -22,7 +22,7 @@ placeholder `analyze-repos.py` script with a full-featured analytics platform.
 python3 ./scripts/analyze-repos.py \
   --project "${{ matrix.project }}" \
   --server "${{ matrix.server }}" \
-  --repos-path "./gerrit-repos"
+  --repos-path "./${{ matrix.server }}"
 ```
 
 **Limitations:**
@@ -38,7 +38,7 @@ python3 ./scripts/analyze-repos.py \
 # New workflow step
 python3 generate_reports.py \
   --project "${{ matrix.project }}" \
-  --repos-path "./gerrit-repos" \
+  --repos-path "./${{ matrix.server }}" \
   --config-dir "./configuration" \
   --output-dir "./reports" \
   --verbose
@@ -93,7 +93,7 @@ python3 generate_reports.py \
 - name: "Check repository data"
 
   run: |
-    # Check gerrit-repos directory exists
+    # Check server-specific directory exists
     # Count available repositories
     # Handle missing data appropriately
 ```
@@ -105,7 +105,7 @@ python3 generate_reports.py \
   run: |
     python3 generate_reports.py \
       --project "${{ matrix.project }}" \
-      --repos-path "./gerrit-repos" \
+      --repos-path "./${{ matrix.server }}" \
       --config-dir "./configuration" \
       --output-dir "./reports" \
       --verbose
@@ -316,7 +316,7 @@ performance:
 
 ```bash
 # Validates repository data before analysis
-if [ ! -d "./gerrit-repos" ]; then
+if [ ! -d "./${{ matrix.server }}" ]; then
   echo "❌ No repository data found"
   exit 1
 fi
@@ -544,7 +544,7 @@ Example: base_url: "https://your-gerrit.org/r"
 # Enable detailed logging
 python generate_reports.py \
   --project YOUR_PROJECT \
-  --repos-path ./gerrit-repos \
+  --repos-path ./gerrit.example.org \
   --log-level DEBUG \
   --verbose
 ```
