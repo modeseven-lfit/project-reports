@@ -1865,6 +1865,11 @@ class ReportRenderer:
         inactive_pct = (inactive_repos / total_repos * 100) if total_repos > 0 else 0
         no_commit_pct = (no_commit_repos / total_repos * 100) if total_repos > 0 else 0
 
+        # Get configuration thresholds for definitions
+        activity_threshold = self.config.get("activity_threshold_days", 365)
+        old_years = self.config.get("age_buckets", {}).get("old_years", 1)
+        very_old_years = self.config.get("age_buckets", {}).get("very_old_years", 3)
+
         return f"""## 📈 Global Summary
 
 | Metric | Count | Percentage |
@@ -1876,7 +1881,18 @@ class ReportRenderer:
 | Total Contributors | {self._format_number(total_authors)} | - |
 | Organizations | {self._format_number(total_orgs)} | - |
 | Total Commits | {self._format_number(total_commits)} | - |
-| Total Lines of Code | {self._format_number(total_lines_added)} | - |"""
+| Total Lines of Code | {self._format_number(total_lines_added)} | - |
+
+### Activity Status Definitions
+
+- **✅ Active**: Repository has commits within the last {activity_threshold} days
+- **⚠️ Inactive**: Repository has no commits within the last {activity_threshold} days
+
+### Age Category Definitions (for inactive repositories)
+
+- **⚠️ Recent**: Inactive for less than {old_years} year{'s' if old_years != 1 else ''}
+- **🟡 Old**: Inactive for {old_years}-{very_old_years} years
+- **🔴 Very Old**: Inactive for more than {very_old_years} years"""
 
     def _generate_activity_distribution_section(self, data: dict[str, Any]) -> str:
         """Generate repository activity distribution section."""
@@ -1889,24 +1905,27 @@ class ReportRenderer:
         if not (very_old or old or recent_inactive):
             return "## 📅 Repository Activity Distribution\n\nAll repositories are currently active! 🎉"
 
-        sections = ["## 📅 Repository Activity Distribution"]
+        # Get thresholds for consistent definitions
+        activity_threshold = self.config.get("activity_threshold_days", 365)
+        old_years = self.config.get("age_buckets", {}).get("old_years", 1)
+        very_old_years = self.config.get("age_buckets", {}).get("very_old_years", 3)
+
+        sections = ["## 📅 Repository Activity Distribution",
+                   "",
+                   f"*Repositories are considered inactive after {activity_threshold} days without commits.*"]
 
         if very_old:
-            very_old_years = self.config.get("age_buckets", {}).get("very_old_years", 3)
             sections.append(f"### 🔴 Very Old (>{very_old_years} years inactive)")
             sections.append(self._generate_activity_table(very_old))
 
         if old:
-            old_years = self.config.get("age_buckets", {}).get("old_years", 1)
-            very_old_years = self.config.get("age_buckets", {}).get("very_old_years", 3)
             sections.append(f"### 🟡 Old ({old_years}-{very_old_years} years inactive)")
             sections.append(self._generate_activity_table(old))
 
         if recent_inactive:
             # Use the actual old_years threshold from config for the heading
-            old_years_threshold = self.config.get("age_buckets", {}).get("old_years", 1)
-            year_text = "year" if old_years_threshold == 1 else "years"
-            sections.append(f"### ⚠️ Recent Inactive (<{old_years_threshold} {year_text})")
+            year_text = "year" if old_years == 1 else "years"
+            sections.append(f"### ⚠️ Recent Inactive (<{old_years} {year_text})")
             sections.append(self._generate_activity_table(recent_inactive))
 
         return "\n\n".join(sections)
@@ -1922,19 +1941,22 @@ class ReportRenderer:
             return days if days is not None else 999999
         sorted_repos = sorted(repos, key=sort_key, reverse=True)
 
-        lines = ["| Repository | Days Inactive | Last Activity |",
-                 "|------------|---------------|---------------|"]
+        lines = ["| Repository | Days Inactive | Last Commit Date |",
+                 "|------------|---------------|-------------------|"]
 
-        for repo in sorted_repos[:20]:  # Limit to top 20
+        from datetime import datetime, timedelta
+
+        for repo in sorted_repos:  # Show all repositories, not just top 20
             name = repo.get("name", "Unknown")
             days = repo.get("days_since_last_commit")
             if days is None:
                 days = 999999  # Very large number for repos with no commits
-            age_str = self._format_age(days)
-            lines.append(f"| {name} | {days:,} | {age_str} |")
-
-        if len(repos) > 20:
-            lines.append(f"| ... | ... | *({len(repos) - 20:,} more repositories)* |")
+                date_str = "Unknown"
+            else:
+                # Calculate actual date
+                last_activity_date = datetime.now() - timedelta(days=days)
+                date_str = last_activity_date.strftime("%Y-%m-%d")
+            lines.append(f"| {name} | {days:,} | {date_str} |")
 
         return "\n".join(lines)
 
@@ -1945,10 +1967,15 @@ class ReportRenderer:
         if not top_repos:
             return "## 🏆 Top Active Repositories\n\n*No active repositories found.*"
 
+        # Get activity threshold for definition
+        activity_threshold = self.config.get("activity_threshold_days", 365)
+
         lines = ["## 🏆 Top Active Repositories",
                  "",
-                 "| Repository | Commits (1Y) | Net LOC (1Y) | Contributors | Last Activity | Status |",
-                 "|------------|--------------|--------------|--------------|---------------|--------|"]
+                 f"*Top repositories by commit activity in the last year. Status based on commits within {activity_threshold} days.*",
+                 "",
+                 "| Repository | Commits (1Y) | Net LOC (1Y) | Contributors | Last Commit Date | Status |",
+                 "|------------|--------------|--------------|--------------|------------------|--------|"]
 
         for repo in top_repos:
             name = repo.get("name", "Unknown")
@@ -1974,10 +2001,17 @@ class ReportRenderer:
         if not least_active:
             return "## 📉 Least Active Repositories\n\n*All repositories are active!*"
 
+        # Get configuration for category definitions
+        activity_threshold = self.config.get("activity_threshold_days", 365)
+        old_years = self.config.get("age_buckets", {}).get("old_years", 1)
+        very_old_years = self.config.get("age_buckets", {}).get("very_old_years", 3)
+
         lines = ["## 📉 Least Active Repositories",
                  "",
-                 "| Repository | Days Inactive | Last Commits (1Y) | Last Activity | Age Category |",
-                 "|------------|---------------|-------------------|---------------|--------------|"]
+                 f"*Repositories inactive for more than {activity_threshold} days, categorized by inactivity period.*",
+                 "",
+                 "| Repository | Days Inactive | Last Commits (1Y) | Last Commit Date | Age Category |",
+                 "|------------|---------------|-------------------|------------------|--------------|"]
 
         for repo in least_active:
             name = repo.get("name", "Unknown")
@@ -2152,7 +2186,12 @@ class ReportRenderer:
                             key=lambda x: x.get("commit_counts", {}).get("last_365_days", 0),
                             reverse=True)
 
+        # Get activity threshold for definition
+        activity_threshold = self.config.get("activity_threshold_days", 365)
+
         lines = ["## 🔧 Repository Feature Matrix",
+                 "",
+                 f"*Feature analysis for all repositories. Active status based on commits within {activity_threshold} days.*",
                  "",
                  "| Repository | Type | Dependabot | Pre-commit | ReadTheDocs | Workflows | Active |",
                  "|------------|------|------------|------------|-------------|-----------|--------|"]
@@ -2375,7 +2414,18 @@ class ReportRenderer:
                                  re.match(r'^\|[\s\-\|]+\|$', lines[i + 1].strip()))
                     # Only add sortable class if feature is enabled and table has headers
                     sortable_enabled = self.config.get("html_tables", {}).get("sortable", True)
+
+                    # Check if this is the feature matrix table by looking for specific headers
+                    is_feature_matrix = False
+                    if has_headers and i < len(lines):
+                        table_header = line.lower()
+                        if 'repository' in table_header and 'dependabot' in table_header and 'workflows' in table_header:
+                            is_feature_matrix = True
+
                     table_class = ' class="sortable"' if (has_headers and sortable_enabled) else ''
+                    if is_feature_matrix:
+                        table_class = ' class="sortable no-pagination"'
+
                     html_lines.append(f'<table{table_class}>')
                     in_table = True
 
@@ -2469,10 +2519,14 @@ class ReportRenderer:
                     return;
                 }}
 
+                // Check if this table should have pagination disabled
+                const noPagination = table.classList.contains('no-pagination');
+                const usePagination = noPagination ? false : {pagination};
+
                 new simpleDatatables.DataTable(table, {{
                     searchable: {searchable},
                     sortable: {sortable},
-                    paging: {pagination},
+                    paging: usePagination,
                     perPage: {per_page},
                     perPageSelect: {page_options},
                     classes: {{
@@ -2525,22 +2579,14 @@ class ReportRenderer:
         return formatted
 
     def _format_age(self, days: int) -> str:
-        """Format age in days to human readable string."""
-        if days == 0:
-            return "Today"
-        elif days == 1:
-            return "1 day ago"
-        elif days < 7:
-            return f"{days} days ago"
-        elif days < 30:
-            weeks = days // 7
-            return f"{weeks} week{'s' if weeks != 1 else ''} ago"
-        elif days < 365:
-            months = days // 30
-            return f"{months} month{'s' if months != 1 else ''} ago"
-        else:
-            years = days // 365
-            return f"{years} year{'s' if years != 1 else ''} ago"
+        """Format age in days to actual date."""
+        from datetime import datetime, timedelta
+        if days is None or days == 999999:
+            return "Unknown"
+
+        # Calculate actual date
+        date = datetime.now() - timedelta(days=days)
+        return date.strftime("%Y-%m-%d")
 
 
 
@@ -2597,19 +2643,14 @@ def format_number(value: Union[int, float], config: Dict[str, Any]) -> str:
     return str(value)
 
 def format_age_days(days: int) -> str:
-    """Format age in days to human-readable string."""
-    if days == 0:
-        return "today"
-    elif days == 1:
-        return "1 day ago"
-    elif days < 30:
-        return f"{days} days ago"
-    elif days < 365:
-        months = days // 30
-        return f"{months} month{'s' if months != 1 else ''} ago"
-    else:
-        years = days // 365
-        return f"{years} year{'s' if years != 1 else ''} ago"
+    """Format age in days to actual date."""
+    from datetime import datetime, timedelta
+    if days is None or days == 0:
+        return datetime.now().strftime("%Y-%m-%d")
+
+    # Calculate actual date
+    date = datetime.now() - timedelta(days=days)
+    return date.strftime("%Y-%m-%d")
 
 def safe_git_command(cmd: list[str], cwd: Path | None, logger: logging.Logger) -> tuple[bool, str]:
     """
