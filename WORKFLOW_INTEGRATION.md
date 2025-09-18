@@ -181,7 +181,7 @@ configuration/
 - ✅ **Output formatting** preferences
 - ✅ **Feature detection** customization
 - ✅ **Enhanced repository classification** for better project insights
-- ✅ **Gerrit API integration** for repository creation dates
+- ✅ **Gerrit API integration** for project metadata
 - ✅ **Interactive HTML tables** with sorting and filtering
 
 ### **Interactive HTML Tables**
@@ -259,9 +259,8 @@ jjb:           # ci-management repositories
 
 ### **Gerrit API Integration**
 
-The system can automatically fetch repository creation dates from Gerrit
-servers for repositories that have no commits. This eliminates "Unknown"
-creation dates in reports.
+The system can integrate with Gerrit servers to fetch project metadata
+for enhanced reporting capabilities.
 
 **Configuration:**
 
@@ -527,8 +526,7 @@ Action: Check error list in JSON output for specific repository issues
 
 ```text
 Cause: Gerrit server unreachable or API discovery failed
-Status: ⚠️ Degraded - repositories with no commits will show "Unknown"
-creation dates
+Status: ⚠️ Degraded - Gerrit project metadata unavailable
 Action: Verify Gerrit host configuration and network connectivity
 ```
 

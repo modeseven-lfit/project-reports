@@ -19,8 +19,8 @@ development practices.
   domain mapping
 - **🏷️ Repository Classification**: Activity-based categorization and
   aging analysis
-- **🌐 Gerrit API Integration**: Automatic repository creation date fetching
-  for comprehensive reporting
+- **🌐 Gerrit API Integration**: Project metadata fetching for enhanced
+  reporting
 - **📊 Interactive HTML Tables**: Sortable, filterable, and searchable
   data tables
 - **📋 Multi-Format Output**: JSON (data), Markdown (readable),
