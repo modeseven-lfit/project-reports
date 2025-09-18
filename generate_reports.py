@@ -354,24 +354,28 @@ class GerritAPIClient:
             encoded_name = project_name.replace('/', '%2F')
             url = f"/projects/{encoded_name}?d"
 
-            logging.debug(f"Making Gerrit API request: {self.base_url}{url}")
+            full_url = f"{self.base_url}{url}"
+            logging.info(f"GERRIT DEBUG: Making API request to: {full_url}")
             response = self.client.get(url)
+            logging.info(f"GERRIT DEBUG: Response status: {response.status_code}, content length: {len(response.text)}")
 
             if response.status_code == 200:
+                logging.debug(f"GERRIT DEBUG: Raw response for {project_name}: {response.text[:500]}...")
                 result = self._parse_json_response(response.text)
-                logging.debug(f"Successfully fetched project info for {project_name}")
+                logging.info(f"GERRIT DEBUG: Successfully parsed project info for {project_name}, keys: {list(result.keys()) if result else 'None'}")
                 return result
             elif response.status_code == 404:
-                logging.warning(f"Project not found in Gerrit: {project_name}")
+                logging.warning(f"GERRIT DEBUG: Project not found in Gerrit: {project_name}")
                 return None
             else:
-                logging.error(f"Gerrit API returned {response.status_code} for project {project_name}: {response.text}")
+                logging.error(f"GERRIT DEBUG: API returned {response.status_code} for project {project_name}")
+                logging.error(f"GERRIT DEBUG: Response text: {response.text}")
                 return None
 
         except Exception as e:
-            logging.error(f"Error fetching project info for {project_name}: {e}")
+            logging.error(f"GERRIT DEBUG: Exception fetching project info for {project_name}: {e}")
             import traceback
-            logging.debug(f"Full traceback: {traceback.format_exc()}")
+            logging.error(f"GERRIT DEBUG: Full traceback: {traceback.format_exc()}")
             return None
 
     def _parse_json_response(self, response_text: str) -> dict[str, Any]:
@@ -387,6 +391,27 @@ class GerritAPIClient:
             return result if isinstance(result, dict) else {}
         except json.JSONDecodeError as e:
             logging.error(f"Invalid JSON response: {e}")
+            return {}
+
+    def get_all_projects(self) -> dict[str, Any]:
+        """Get all projects with detailed information including creation dates."""
+        try:
+            logging.info("GERRIT DEBUG: Fetching all projects from Gerrit API")
+            response = self.client.get("/projects/?d")
+
+            if response.status_code == 200:
+                logging.info(f"GERRIT DEBUG: Successfully fetched projects list, response length: {len(response.text)}")
+                result = self._parse_json_response(response.text)
+                logging.info(f"GERRIT DEBUG: Parsed {len(result)} projects from API response")
+                return result if isinstance(result, dict) else {}
+            else:
+                logging.error(f"GERRIT DEBUG: Failed to fetch projects list: HTTP {response.status_code}")
+                return {}
+
+        except Exception as e:
+            logging.error(f"GERRIT DEBUG: Exception while fetching all projects: {e}")
+            import traceback
+            logging.debug(f"GERRIT DEBUG: Full traceback: {traceback.format_exc()}")
             return {}
 
 # =============================================================================
@@ -408,21 +433,93 @@ class GitDataCollector:
 
         # Initialize Gerrit API client if configured
         self.gerrit_client = None
+        self.gerrit_projects_cache: dict[str, dict[str, Any]] = {}  # Cache for all Gerrit project data
         gerrit_config = self.config.get("gerrit", {})
+        self.logger.info(f"GERRIT DEBUG: Gerrit configuration: enabled={gerrit_config.get('enabled', False)}, host={gerrit_config.get('host', 'None')}")
+
         if gerrit_config.get("enabled", False):
             host = gerrit_config.get("host")
             base_url = gerrit_config.get("base_url")
             timeout = gerrit_config.get("timeout", 30.0)
+            self.logger.info(f"GERRIT DEBUG: Attempting to initialize Gerrit client - host: {host}, base_url: '{base_url}', timeout: {timeout}")
+
             if host:
                 try:
                     self.gerrit_client = GerritAPIClient(host, base_url, timeout)
-                    self.logger.info(f"Initialized Gerrit API client for {host} with base_url: {self.gerrit_client.base_url}")
+                    self.logger.info(f"GERRIT DEBUG: Successfully initialized Gerrit API client for {host} with base_url: {self.gerrit_client.base_url}")
+                    # Fetch all project data upfront
+                    self._fetch_all_gerrit_projects()
                 except Exception as e:
-                    self.logger.error(f"Failed to initialize Gerrit API client for {host}: {e}")
+                    self.logger.error(f"GERRIT DEBUG: Failed to initialize Gerrit API client for {host}: {e}")
+                    import traceback
+                    self.logger.error(f"GERRIT DEBUG: Full traceback: {traceback.format_exc()}")
             else:
-                self.logger.warning("Gerrit enabled but no host configured")
+                self.logger.error("GERRIT DEBUG: Gerrit enabled but no host configured")
         else:
-            self.logger.debug("Gerrit API client disabled in configuration")
+            self.logger.info("GERRIT DEBUG: Gerrit API client disabled in configuration")
+
+    def _fetch_all_gerrit_projects(self) -> None:
+        """Fetch all Gerrit project data upfront and cache it."""
+        if not self.gerrit_client:
+            return
+
+        self.logger.info("GERRIT DEBUG: Fetching all Gerrit projects upfront...")
+        try:
+            all_projects = self.gerrit_client.get_all_projects()
+
+            if all_projects:
+                self.gerrit_projects_cache = all_projects
+                projects_with_creation = sum(1 for proj in all_projects.values() if proj.get("created"))
+                self.logger.info(f"GERRIT DEBUG: Successfully cached {len(all_projects)} projects, {projects_with_creation} have creation dates")
+
+                # Log some sample project names for debugging
+                sample_names = list(all_projects.keys())[:5]
+                self.logger.info(f"GERRIT DEBUG: Sample project names: {sample_names}")
+            else:
+                self.logger.warning("GERRIT DEBUG: No projects returned from Gerrit API")
+
+        except Exception as e:
+            self.logger.error(f"GERRIT DEBUG: Failed to fetch all Gerrit projects: {e}")
+            import traceback
+            self.logger.error(f"GERRIT DEBUG: Full traceback: {traceback.format_exc()}")
+
+    def _get_gerrit_creation_date(self, repo_name: str) -> tuple[Optional[str], Optional[int]]:
+        """Get creation date for a repository from the cached Gerrit data."""
+        if not self.gerrit_projects_cache:
+            return None, None
+
+        # Try multiple project name variations
+        project_name_variations = [
+            repo_name,  # Direct repository name
+            repo_name.replace('-', '/'),  # Convert dashes to slashes
+            repo_name.replace('_', '/'),  # Convert underscores to slashes
+        ]
+
+        # If repo_name looks like a path, also try the base name
+        if '/' in repo_name:
+            project_name_variations.append(repo_name.split('/')[-1])
+
+        self.logger.debug(f"GERRIT DEBUG: Trying project name variations for {repo_name}: {project_name_variations}")
+
+        for project_name in project_name_variations:
+            if project_name in self.gerrit_projects_cache:
+                project_info = self.gerrit_projects_cache[project_name]
+                if "created" in project_info:
+                    creation_date_str = project_info["created"]
+                    try:
+                        creation_date = datetime.datetime.fromisoformat(creation_date_str.replace('Z', '+00:00'))
+                        now = datetime.datetime.now(datetime.timezone.utc)
+                        days_since = (now - creation_date).days
+
+                        self.logger.info(f"GERRIT DEBUG: Found creation date for {repo_name} (matched as {project_name}): {creation_date_str}")
+                        return creation_date.isoformat(), days_since
+
+                    except ValueError as e:
+                        self.logger.error(f"GERRIT DEBUG: Could not parse creation date '{creation_date_str}' for {project_name}: {e}")
+                        return None, None
+
+        self.logger.debug(f"GERRIT DEBUG: No creation date found for {repo_name} in cached Gerrit data")
+        return None, None
 
     def __del__(self):
         """Cleanup Gerrit client when GitDataCollector is destroyed."""
@@ -731,8 +828,15 @@ class GitDataCollector:
                 except ValueError as e:
                     self.logger.warning(f"Could not parse last commit date for {repo_name}: {e}")
         else:
-            # No commits found - try to get creation date from Gerrit API
-            self._fetch_creation_date_from_gerrit(repo_metrics, repo_name)
+            # No commits found - repository has no commit history
+            self.logger.info(f"GERRIT DEBUG: Repository {repo_name} has no commits")
+
+        # Always try to get creation date from Gerrit (regardless of commit status)
+        creation_timestamp, days_since_creation = self._get_gerrit_creation_date(repo_name)
+        if creation_timestamp:
+            repo_metrics["creation_timestamp"] = creation_timestamp
+            repo_metrics["days_since_creation"] = days_since_creation
+            self.logger.info(f"GERRIT DEBUG: Set creation date for {repo_name}: {days_since_creation} days ago")
 
         # Convert author repository sets to counts for JSON serialization
         for author_email, author_data in metrics["authors"].items():
@@ -757,42 +861,10 @@ class GitDataCollector:
         metrics["repository"]["authors"] = repo_authors
 
     def _fetch_creation_date_from_gerrit(self, repo_metrics: dict[str, Any], repo_name: str) -> None:
-        """Fetch repository creation date from Gerrit API for repos with no commits."""
-        if not self.gerrit_client:
-            self.logger.warning(f"No Gerrit client available for {repo_name} - creation date will be missing")
-            return
-
-        try:
-            self.logger.debug(f"Fetching creation date from Gerrit for project: {repo_name}")
-            project_info = self.gerrit_client.get_project_info(repo_name)
-
-            if project_info:
-                self.logger.debug(f"Received project info for {repo_name}: {list(project_info.keys())}")
-                if "created" in project_info:
-                    creation_date_str = project_info["created"]
-                    try:
-                        # Parse Gerrit timestamp format (typically RFC 3339)
-                        creation_date = datetime.datetime.fromisoformat(creation_date_str.replace('Z', '+00:00'))
-                        repo_metrics["creation_timestamp"] = creation_date.isoformat()
-
-                        # Calculate days since creation
-                        now = datetime.datetime.now(datetime.timezone.utc)
-                        days_since = (now - creation_date).days
-                        repo_metrics["days_since_creation"] = days_since
-
-                        self.logger.info(f"Retrieved creation date for {repo_name}: {creation_date_str} ({days_since} days ago)")
-
-                    except ValueError as e:
-                        self.logger.error(f"Could not parse creation date '{creation_date_str}' for {repo_name}: {e}")
-                else:
-                    self.logger.warning(f"No 'created' field in Gerrit project info for {repo_name}")
-            else:
-                self.logger.warning(f"No project info returned from Gerrit for {repo_name}")
-
-        except Exception as e:
-            self.logger.error(f"Error fetching creation date from Gerrit for {repo_name}: {e}")
-            import traceback
-            self.logger.debug(f"Full traceback: {traceback.format_exc()}")
+        """Legacy method - now replaced by bulk fetching approach."""
+        # This method is no longer used - all Gerrit data is fetched upfront in _fetch_all_gerrit_projects()
+        # and accessed via _get_gerrit_creation_date()
+        pass
 
     def _get_repo_cache_key(self, repo_path: Path) -> Optional[str]:
         """Generate a cache key based on the repository's HEAD commit hash."""
@@ -1362,6 +1434,9 @@ class DataAggregator:
         """
         self.logger.info("Starting global data aggregation")
 
+        # Debug: Analyze repository commit status
+        self._analyze_repository_commit_status(repo_metrics)
+
         # Configuration values
         activity_threshold_days = self.config.get("activity_threshold_days", 365)
         very_old_years = self.config.get("age_buckets", {}).get("very_old_years", 3)
@@ -1492,6 +1567,79 @@ class DataAggregator:
         self.logger.info(f"Found {len(authors)} authors across {len(organizations)} organizations")
 
         return summaries
+
+    def _analyze_repository_commit_status(self, repo_metrics: list[dict[str, Any]]) -> None:
+        """Diagnostic function to analyze repository commit status and Gerrit data availability."""
+        self.logger.info("GERRIT DEBUG: === Repository Analysis with Gerrit Data ===")
+
+        total_repos = len(repo_metrics)
+        repos_with_commits = 0
+        repos_no_commits = 0
+        all_repos_with_creation_data = 0
+        all_repos_missing_creation_data = 0
+
+        sample_no_commit_repos: list[dict[str, Any]] = []
+        sample_repos_with_gerrit_data: list[dict[str, Any]] = []
+
+        for repo in repo_metrics:
+            repo_name = repo.get("name", "Unknown")
+            commit_counts = repo.get("commit_counts", {})
+            creation_timestamp = repo.get("creation_timestamp")
+            days_since_creation = repo.get("days_since_creation")
+
+            # Check if repository has any commits across all time windows
+            has_commits = any(count > 0 for count in commit_counts.values())
+
+            if has_commits:
+                repos_with_commits += 1
+            else:
+                repos_no_commits += 1
+                if len(sample_no_commit_repos) < 3:  # Collect sample for detailed analysis
+                    sample_no_commit_repos.append({
+                        "name": repo_name,
+                        "creation_timestamp": creation_timestamp,
+                        "days_since_creation": days_since_creation,
+                        "commit_counts": commit_counts
+                    })
+
+            # Check Gerrit data for ALL repositories (not just no-commit ones)
+            if creation_timestamp is not None or days_since_creation is not None:
+                all_repos_with_creation_data += 1
+                if len(sample_repos_with_gerrit_data) < 3:
+                    sample_repos_with_gerrit_data.append({
+                        "name": repo_name,
+                        "has_commits": has_commits,
+                        "creation_timestamp": creation_timestamp,
+                        "days_since_creation": days_since_creation
+                    })
+            else:
+                all_repos_missing_creation_data += 1
+
+        self.logger.info(f"GERRIT DEBUG: Total repositories: {total_repos}")
+        self.logger.info(f"GERRIT DEBUG: Repositories with commits: {repos_with_commits}")
+        self.logger.info(f"GERRIT DEBUG: Repositories with NO commits: {repos_no_commits}")
+        self.logger.info(f"GERRIT DEBUG: ALL repos WITH Gerrit creation data: {all_repos_with_creation_data}")
+        self.logger.info(f"GERRIT DEBUG: ALL repos MISSING Gerrit creation data: {all_repos_missing_creation_data}")
+
+        if sample_repos_with_gerrit_data:
+            self.logger.info("GERRIT DEBUG: Sample repositories WITH Gerrit creation data:")
+            for repo in sample_repos_with_gerrit_data:
+                self.logger.info(f"GERRIT DEBUG:   - {repo['name']} (has_commits={repo['has_commits']}): {repo['days_since_creation']} days old")
+
+        if sample_no_commit_repos:
+            self.logger.info("GERRIT DEBUG: Sample repositories with NO commits:")
+            for repo in sample_no_commit_repos:
+                status = "HAS creation date" if repo['creation_timestamp'] else "MISSING creation date"
+                self.logger.info(f"GERRIT DEBUG:   - {repo['name']}: {status}")
+
+        # Analysis
+        if all_repos_with_creation_data == 0:
+            self.logger.error("GERRIT DEBUG: NO repositories have Gerrit creation data - bulk fetch likely failed")
+        elif all_repos_missing_creation_data == 0:
+            self.logger.info("GERRIT DEBUG: ALL repositories have Gerrit creation data - bulk fetch working perfectly!")
+        else:
+            success_rate = (all_repos_with_creation_data / total_repos) * 100
+            self.logger.info(f"GERRIT DEBUG: Partial success - {success_rate:.1f}% of repositories have creation data")
 
     def compute_author_rollups(self, repo_metrics: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """
@@ -1780,8 +1928,8 @@ class ReportRenderer:
         # Deployed GitHub workflows telemetry
         sections.append(self._generate_deployed_workflows_section(data))
 
-        # Appendix (moved to last)
-        sections.append(self._generate_appendix_section(data))
+        # Footer
+        sections.append("Generated with ❤️ by Release Engineering")
 
         return "\n\n".join(sections)
 
@@ -1840,7 +1988,7 @@ class ReportRenderer:
 | Total Contributors | {self._format_number(total_authors)} | - |
 | Organizations | {self._format_number(total_orgs)} | - |
 | Total Commits | {self._format_number(total_commits)} | - |
-| Total Lines Added | {self._format_number(total_lines_added)} | - |"""
+| Total Lines of Code | {self._format_number(total_lines_added)} | - |"""
 
     def _generate_activity_distribution_section(self, data: dict[str, Any]) -> str:
         """Generate repository activity distribution section."""
@@ -1986,6 +2134,10 @@ class ReportRenderer:
         for repo in no_commit_repos:
             name = repo.get("name", "Unknown")
             days_since_creation = repo.get("days_since_creation")
+            creation_timestamp = repo.get("creation_timestamp")
+
+            # Debug logging to understand what data we have
+            self.logger.debug(f"GERRIT DEBUG: Processing no-commit repo {name}: days_since_creation={days_since_creation}, creation_timestamp={creation_timestamp}")
 
             if days_since_creation is not None:
                 creation_age = self._format_age(days_since_creation)
@@ -2154,31 +2306,8 @@ class ReportRenderer:
 
     def _generate_appendix_section(self, data: dict[str, Any]) -> str:
         """Generate appendix with metadata and configuration."""
-        config_digest = data.get("config_digest", "")[:12]
-        schema_version = data.get("schema_version", "1.0.0")
-        script_version = data.get("script_version", "1.0.0")
-
-        time_windows = data.get("time_windows", {})
-        window_info = []
-        for name, window in time_windows.items():
-            days = window.get("days", 0)
-            window_info.append(f"- **{name}**: {days} days")
-
-        windows_text = "\n".join(window_info) if window_info else "- Default time windows"
-
-        return f"""## 📋 Report Metadata
-
-**Configuration Digest:** `{config_digest}...`
-**Schema Version:** {schema_version}
-**Script Version:** {script_version}
-
-**Time Windows:**
-{windows_text}
-
-**Report Generation:** This report was generated by the Repository Reporting System, analyzing Git repository data and features to provide comprehensive insights into project activity, contributor patterns, and development practices.
-
----
-*Generated with ❤️ by Release Engineering*"""
+        # This method is no longer used - metadata section has been removed
+        return ""
 
     def _convert_markdown_to_html(self, markdown_content: str) -> str:
         """Convert Markdown content to HTML with embedded CSS."""
@@ -2297,8 +2426,7 @@ class ReportRenderer:
             border: 1px solid #ddd;
             border-radius: 4px;
             font-size: 14px;
-            width: 400px;
-            max-width: 90%;
+            width: 250px;
         }}
 
         .dataTable-selector select {{
@@ -2477,7 +2605,7 @@ class ReportRenderer:
                         disabled: "disabled"
                     }},
                     labels: {{
-                        placeholder: "Search repositories, contributors, organizations, and more...",
+                        placeholder: "Search repositories, contributors, etc...",
                         perPage: "entries per page",
                         noRows: "No entries found",
                         info: "Showing {{start}} to {{end}} of {{rows}} entries"
