@@ -69,8 +69,8 @@ jobs:
 
           # Check each project has required fields
           if ! echo "$projects_json" | \
-            jq -e 'all(.project and .server)' > /dev/null; then
-            echo "::error::Each project must have 'project' and 'server' fields"
+            jq -e 'all(.project and .gerrit)' > /dev/null; then
+            echo "::error::Each project must have 'project' and 'gerrit' fields"
             exit 1
           fi
 
@@ -90,7 +90,7 @@ jobs:
             echo "### Projects:"
           } >> "$GITHUB_STEP_SUMMARY"
           echo "$projects_json" | \
-            jq -r '.[] | "- **\(.project):** \(.server)"' >> \
+            jq -r '.[] | "- **\(.project):** \(.gerrit)"' >> \
             "$GITHUB_STEP_SUMMARY"
 
   analyze:
@@ -120,8 +120,8 @@ jobs:
         uses: modeseven-lfreleng-actions/gerrit-clone-action@main # latest
         id: clone
         with:
-          host: ${{ matrix.server }}
-          path-prefix: "./${{ matrix.server }}"
+          host: ${{ matrix.gerrit }}
+          path-prefix: "./${{ matrix.gerrit }}"
           skip-archived: "true"
           threads: "4"
           clone-timeout: "300"
@@ -148,7 +148,7 @@ jobs:
           # Execute the comprehensive reporting system
           python3 generate_reports.py \
             --project "$project" \
-            --repos-path "./${{ matrix.server }}" \
+            --repos-path "./${{ matrix.gerrit }}" \
             --config-dir "./configuration" \
             --output-dir "./reports" \
             --verbose
@@ -172,7 +172,7 @@ jobs:
             || echo "No project reports directory found"
 
           echo "Looking for clone manifest:"
-          ls -la "./${{ matrix.server }}/clone-manifest.json" \
+          ls -la "./${{ matrix.gerrit }}/clone-manifest.json" \
             || echo "No clone manifest found"
 
           echo "All files in reports directory tree:"
@@ -185,7 +185,7 @@ jobs:
         uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
         with:
           name: clone-manifest-${{ matrix.project }}
-          path: "./${{ matrix.server }}/clone-manifest.json"
+          path: "./${{ matrix.gerrit }}/clone-manifest.json"
           retention-days: 30
           if-no-files-found: warn
 

@@ -21,8 +21,8 @@ placeholder `analyze-repos.py` script with a full-featured analytics platform.
 # Old workflow step
 python3 ./scripts/analyze-repos.py \
   --project "${{ matrix.project }}" \
-  --server "${{ matrix.server }}" \
-  --repos-path "./${{ matrix.server }}"
+  --server "${{ matrix.gerrit }}" \
+  --repos-path "./${{ matrix.gerrit }}"
 ```
 
 **Limitations:**
@@ -38,7 +38,7 @@ python3 ./scripts/analyze-repos.py \
 # New workflow step
 python3 generate_reports.py \
   --project "${{ matrix.project }}" \
-  --repos-path "./${{ matrix.server }}" \
+  --repos-path "./${{ matrix.gerrit }}" \
   --config-dir "./configuration" \
   --output-dir "./reports" \
   --verbose
@@ -105,7 +105,7 @@ python3 generate_reports.py \
   run: |
     python3 generate_reports.py \
       --project "${{ matrix.project }}" \
-      --repos-path "./${{ matrix.server }}" \
+      --repos-path "./${{ matrix.gerrit }}" \
       --config-dir "./configuration" \
       --output-dir "./reports" \
       --verbose
@@ -316,7 +316,7 @@ performance:
 
 ```bash
 # Validates repository data before analysis
-if [ ! -d "./${{ matrix.server }}" ]; then
+if [ ! -d "./${{ matrix.gerrit }}" ]; then
   echo "❌ No repository data found"
   exit 1
 fi

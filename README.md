@@ -47,7 +47,7 @@ steps:
     run: |
       python3 generate_reports.py \
         --project "${{ matrix.project }}" \
-        --repos-path "./${{ matrix.server }}" \
+        --repos-path "./${{ matrix.gerrit }}" \
         --config-dir "./configuration" \
         --output-dir "./reports" \
         --verbose
