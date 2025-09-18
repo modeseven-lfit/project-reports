@@ -492,7 +492,8 @@ The report sections follow this information hierarchy:
 7. **📝 Repositories with No Commits** - Unused repositories
 8. **🔧 Repository Feature Matrix** - Feature adoption analysis
 9. **📋 Report Metadata** - Technical details and configuration
-10. **✅ Deployed GitHub Workflows** - CI/CD workflow telemetry (moved to end)
+10. **🏁 Deployed CI/CD Jobs** - CI/CD workflow and Jenkins job telemetry
+   (moved to end)
 
 ---
 

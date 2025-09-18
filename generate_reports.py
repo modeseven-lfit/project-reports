@@ -192,7 +192,7 @@ def setup_time_windows(config: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return windows
 
 # =============================================================================
-# GERRIT API INTEGRATION
+# GERRIT AND JENKINS API INTEGRATION
 # =============================================================================
 
 class GerritAPIError(Exception):
@@ -402,6 +402,126 @@ class GerritAPIClient:
             logging.error(f"Exception while fetching all projects: {e}")
             return {}
 
+
+class JenkinsAPIClient:
+    """Client for interacting with Jenkins REST API."""
+
+    def __init__(self, host: str, timeout: float = 30.0):
+        """Initialize Jenkins API client."""
+        self.host = host
+        self.timeout = timeout
+        self.base_url = f"https://{host}"
+
+        import httpx
+        self.client = httpx.Client(timeout=timeout)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+    def close(self):
+        """Close the HTTP client."""
+        if hasattr(self, 'client'):
+            self.client.close()
+
+    def get_all_jobs(self) -> dict[str, Any]:
+        """Get all jobs from Jenkins."""
+        try:
+            url = f"{self.base_url}/api/json?tree=jobs[name,url,color]"
+            response = self.client.get(url)
+
+            if response.status_code == 200:
+                return response.json()
+            else:
+                logging.warning(f"Jenkins API returned {response.status_code}")
+                return {}
+
+        except Exception as e:
+            logging.error(f"Exception fetching Jenkins jobs: {e}")
+            return {}
+
+    def get_jobs_for_project(self, project_name: str) -> list[dict[str, Any]]:
+        """Get jobs related to a specific Gerrit project."""
+        all_jobs = self.get_all_jobs()
+        project_jobs: list[dict[str, Any]] = []
+
+        if "jobs" not in all_jobs:
+            return project_jobs
+
+        # Convert project name to job name format (replace / with -)
+        project_job_name = project_name.replace("/", "-")
+
+        for job in all_jobs["jobs"]:
+            job_name = job.get("name", "")
+            if project_job_name in job_name:
+                # Get detailed job info
+                job_details = self.get_job_details(job_name)
+                if job_details:
+                    project_jobs.append(job_details)
+
+        return project_jobs
+
+    def get_job_details(self, job_name: str) -> dict[str, Any]:
+        """Get detailed information about a specific job."""
+        try:
+            url = f"{self.base_url}/job/{job_name}/api/json"
+            response = self.client.get(url)
+
+            if response.status_code == 200:
+                job_data = response.json()
+
+                # Get last build info
+                last_build_info = self.get_last_build_info(job_name)
+
+                return {
+                    "name": job_name,
+                    "url": job_data.get("url", ""),
+                    "color": job_data.get("color", ""),
+                    "buildable": job_data.get("buildable", False),
+                    "description": job_data.get("description", ""),
+                    "last_build": last_build_info
+                }
+            else:
+                logging.debug(f"Jenkins job API returned {response.status_code} for {job_name}")
+                return {}
+
+        except Exception as e:
+            logging.debug(f"Exception fetching job details for {job_name}: {e}")
+            return {}
+
+    def get_last_build_info(self, job_name: str) -> dict[str, Any]:
+        """Get information about the last build of a job."""
+        try:
+            url = f"{self.base_url}/job/{job_name}/lastBuild/api/json?tree=result,duration,timestamp,building,number"
+            response = self.client.get(url)
+
+            if response.status_code == 200:
+                build_data = response.json()
+
+                # Convert timestamp to readable format
+                timestamp = build_data.get("timestamp", 0)
+                if timestamp:
+                    from datetime import datetime
+                    build_time = datetime.fromtimestamp(timestamp / 1000)
+                    build_data["build_time"] = build_time.isoformat()
+
+                # Convert duration to readable format
+                duration_ms = build_data.get("duration", 0)
+                if duration_ms:
+                    duration_seconds = duration_ms / 1000
+                    build_data["duration_seconds"] = duration_seconds
+
+                return build_data
+            else:
+                return {}
+
+        except Exception as e:
+            logging.debug(f"Exception fetching last build info for {job_name}: {e}")
+            return {}
+
+
 # =============================================================================
 # GIT DATA COLLECTION (Phase 2 - TODO)
 # =============================================================================
@@ -424,6 +544,11 @@ class GitDataCollector:
         self.gerrit_projects_cache: dict[str, dict[str, Any]] = {}  # Cache for all Gerrit project data
         gerrit_config = self.config.get("gerrit", {})
 
+        # Initialize Jenkins API client if configured
+        self.jenkins_client = None
+        self.jenkins_jobs_cache: dict[str, list[dict[str, Any]]] = {}  # Cache for Jenkins job data
+        jenkins_config = self.config.get("jenkins", {})
+
         if gerrit_config.get("enabled", False):
             host = gerrit_config.get("host")
             base_url = gerrit_config.get("base_url")
@@ -439,6 +564,20 @@ class GitDataCollector:
                     self.logger.error(f"Failed to initialize Gerrit API client for {host}: {e}")
             else:
                 self.logger.error("Gerrit enabled but no host configured")
+
+        # Initialize Jenkins client
+        if jenkins_config.get("enabled", False):
+            host = jenkins_config.get("host")
+            timeout = jenkins_config.get("timeout", 30.0)
+
+            if host:
+                try:
+                    self.jenkins_client = JenkinsAPIClient(host, timeout)
+                    self.logger.info(f"Initialized Jenkins API client for {host}")
+                except Exception as e:
+                    self.logger.error(f"Failed to initialize Jenkins API client for {host}: {e}")
+            else:
+                self.logger.error("Jenkins enabled but no host configured")
 
     def _fetch_all_gerrit_projects(self) -> None:
         """Fetch all Gerrit project data upfront and cache it."""
@@ -575,6 +714,15 @@ class GitDataCollector:
 
             # Convert sets to counts for JSON serialization
             repo_data = metrics["repository"]
+
+            # Add Jenkins job information if available
+            if self.jenkins_client:
+                jenkins_jobs = self._get_jenkins_jobs_for_repo(repo_name)
+                repo_data["jenkins"] = {
+                    "jobs": jenkins_jobs,
+                    "job_count": len(jenkins_jobs),
+                    "has_jobs": len(jenkins_jobs) > 0
+                }
             unique_contributors = repo_data["unique_contributors"]
             for window in self.time_windows:
                 contributor_set = unique_contributors[window]
@@ -587,13 +735,25 @@ class GitDataCollector:
             if self.cache_enabled:
                 self._save_cached_metrics(repo_path, repo_data)
 
+            return metrics
+
         except Exception as e:
             self.logger.error(f"Error collecting Git metrics for {repo_name}: {e}")
             errors_list = metrics["errors"]
             assert isinstance(errors_list, list)
             errors_list.append(f"Unexpected error: {str(e)}")
+            return metrics
 
-        return metrics
+    def _get_jenkins_jobs_for_repo(self, repo_name: str) -> list[dict[str, Any]]:
+        """Get Jenkins jobs for a specific repository."""
+        if not self.jenkins_client:
+            return []
+
+        try:
+            return self.jenkins_client.get_jobs_for_project(repo_name)
+        except Exception as e:
+            self.logger.debug(f"Error fetching Jenkins jobs for {repo_name}: {e}")
+            return []
 
     def bucket_commit_into_windows(self, commit_datetime: datetime.datetime, time_windows: dict[str, dict[str, Any]]) -> List[str]:
         """
@@ -1857,7 +2017,7 @@ class ReportRenderer:
         if include_sections.get("repo_feature_matrix", True):
             sections.append(self._generate_feature_matrix_section(data))
 
-        # Deployed GitHub workflows telemetry
+        # Deployed CI/CD jobs telemetry
         sections.append(self._generate_deployed_workflows_section(data))
 
         # Footer
@@ -2105,36 +2265,56 @@ class ReportRenderer:
         return "\n".join(lines)
 
     def _generate_deployed_workflows_section(self, data: dict[str, Any]) -> str:
-        """Generate deployed GitHub workflows telemetry section."""
+        """Generate deployed CI/CD jobs telemetry section."""
         repositories = data.get("repositories", [])
 
         if not repositories:
-            return "## ✅ Deployed GitHub Workflows\n\n*No repositories found.*"
+            return "## 🏁 Deployed CI/CD Jobs\n\n*No repositories found.*"
 
-        # Collect repositories that have workflows
-        repos_with_workflows = []
+        # Collect repositories that have workflows or Jenkins jobs
+        repos_with_cicd = []
+        has_any_jenkins = False
+
         for repo in repositories:
             workflow_names = repo.get("features", {}).get("workflows", {}).get("workflow_names", [])
-            if workflow_names:
-                repos_with_workflows.append({
+            jenkins_jobs = repo.get("jenkins", {}).get("jobs", [])
+            jenkins_job_names = [job.get("name", "") for job in jenkins_jobs if job.get("name")]
+
+            if workflow_names or jenkins_job_names:
+                repos_with_cicd.append({
                     "name": repo.get("name", "Unknown"),
-                    "workflow_names": workflow_names
+                    "workflow_names": workflow_names,
+                    "jenkins_job_names": jenkins_job_names
                 })
+                if jenkins_job_names:
+                    has_any_jenkins = True
 
-        if not repos_with_workflows:
-            return "## ✅ Deployed GitHub Workflows\n\n*No GitHub workflows detected in any repositories.*"
+        if not repos_with_cicd:
+            return "## 🏁 Deployed CI/CD Jobs\n\n*No CI/CD jobs detected in any repositories.*"
 
-        lines = ["## ✅ Deployed GitHub Workflows",
-                 "",
-                 "| Repository | Workflow Name(s) |",
-                 "|------------|------------------|"]
+        # Build table header based on whether Jenkins jobs exist
+        if has_any_jenkins:
+            lines = ["## 🏁 Deployed CI/CD Jobs",
+                     "",
+                     "| Repository | GitHub Workflows | Jenkins Jobs |",
+                     "|------------|-------------------|--------------|"]
+        else:
+            lines = ["## 🏁 Deployed CI/CD Jobs",
+                     "",
+                     "| Repository | GitHub Workflows |",
+                     "|------------|-------------------|"]
 
-        for repo in sorted(repos_with_workflows, key=lambda x: x["name"]):
+        for repo in sorted(repos_with_cicd, key=lambda x: x["name"]):
             name = repo["name"]
-            workflow_names_str = ", ".join(sorted(repo["workflow_names"]))
-            lines.append(f"| {name} | {workflow_names_str} |")
+            workflow_names_str = "<br>".join(sorted(repo["workflow_names"])) if repo["workflow_names"] else ""
 
-        lines.extend(["", f"**Total:** {len(repos_with_workflows)} repositories with GitHub workflows"])
+            if has_any_jenkins:
+                jenkins_names_str = "<br>".join(sorted(repo["jenkins_job_names"])) if repo["jenkins_job_names"] else ""
+                lines.append(f"| {name} | {workflow_names_str} | {jenkins_names_str} |")
+            else:
+                lines.append(f"| {name} | {workflow_names_str} |")
+
+        lines.extend(["", f"**Total:** {len(repos_with_cicd)} repositories with CI/CD jobs"])
         return "\n".join(lines)
 
     def _generate_contributors_section(self, data: dict[str, Any]) -> str:
