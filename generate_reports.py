@@ -457,6 +457,42 @@ class GitDataCollector:
         except Exception as e:
             self.logger.error(f"Failed to fetch Gerrit projects: {e}")
 
+    def _get_gerrit_project_name(self, repo_path: Path) -> str:
+        """
+        Derive the full Gerrit project name from the repository path.
+
+        For paths like /path/to/gerrit-repos-project/aal/mgmt,
+        returns 'aal/mgmt' (the full Gerrit hierarchy).
+
+        If the path structure doesn't match expected Gerrit layout,
+        falls back to just the repository folder name.
+        """
+        try:
+            # Find the gerrit-repos-* directory in the path hierarchy
+            path_parts = repo_path.parts
+            gerrit_root_idx = None
+
+            for i, part in enumerate(path_parts):
+                if part.startswith('gerrit-repos-'):
+                    gerrit_root_idx = i
+                    break
+
+            if gerrit_root_idx is not None and gerrit_root_idx < len(path_parts) - 1:
+                # Extract the project path relative to the gerrit-repos-* directory
+                project_path_parts = path_parts[gerrit_root_idx + 1:]
+                gerrit_project_name = '/'.join(project_path_parts)
+
+                self.logger.debug(f"Derived Gerrit project name: {gerrit_project_name} from {repo_path}")
+                return gerrit_project_name
+            else:
+                # Fallback: no gerrit-repos-* directory found, use folder name
+                self.logger.debug(f"No gerrit-repos-* directory found in path {repo_path}, using folder name")
+                return repo_path.name
+
+        except Exception as e:
+            self.logger.warning(f"Error deriving Gerrit project name from {repo_path}: {e}")
+            return repo_path.name
+
 
 
     def __del__(self):
@@ -476,7 +512,7 @@ class GitDataCollector:
         Collects: timestamps, author name/email, added/removed lines.
         Returns structured metrics or error descriptor.
         """
-        repo_name = repo_path.name
+        repo_name = self._get_gerrit_project_name(repo_path)
         self.logger.debug(f"Collecting Git metrics for {repo_name}")
 
         # Initialize metrics structure
@@ -800,7 +836,10 @@ class GitDataCollector:
             head_hash = output.strip()
             # Include time windows in cache key to invalidate when windows change
             windows_key = hashlib.sha256(json.dumps(self.time_windows, sort_keys=True).encode()).hexdigest()[:8]
-            return f"{repo_path.name}_{head_hash}_{windows_key}"
+            project_name = self._get_gerrit_project_name(repo_path)
+            # Replace path separators for cache key
+            safe_project_name = project_name.replace('/', '_')
+            return f"{safe_project_name}_{head_hash}_{windows_key}"
 
         return None
 
@@ -827,7 +866,8 @@ class GitDataCollector:
 
             # Validate cache structure
             if not isinstance(cached_data, dict) or "repository" not in cached_data:
-                self.logger.warning(f"Invalid cache structure for {repo_path.name}")
+                project_name = self._get_gerrit_project_name(repo_path)
+                self.logger.warning(f"Invalid cache structure for {project_name}")
                 return None
 
             # Check if cache is compatible with current time windows
@@ -2811,7 +2851,17 @@ class RepositoryReporter:
                     # Check if it's a git repository
                     git_dir = item / ".git"
                     if git_dir.exists():
-                        self.logger.debug(f"Found git repository: {item.relative_to(repos_path)}")
+                        # Derive Gerrit project name from path
+                        gerrit_project_name = self.git_collector._get_gerrit_project_name(item)
+                        self.logger.debug(f"Found git repository: {gerrit_project_name} at {item.relative_to(repos_path)}")
+
+                        # Validate against Gerrit API if available
+                        if hasattr(self.git_collector, 'gerrit_projects_cache') and self.git_collector.gerrit_projects_cache:
+                            if gerrit_project_name in self.git_collector.gerrit_projects_cache:
+                                self.logger.debug(f"Verified {gerrit_project_name} exists in Gerrit")
+                            else:
+                                self.logger.warning(f"Repository {gerrit_project_name} not found in Gerrit API cache")
+
                         repo_dirs.append(item)
                     else:
                         # Recursively search subdirectories
