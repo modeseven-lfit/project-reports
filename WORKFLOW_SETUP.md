@@ -36,7 +36,8 @@ contains an array of project configurations:
 
 #### Setting up the Variable
 
-1. Go to your repository's **Settings** → **Secrets and variables** → **Actions**
+1. Go to your repository's **Settings** → **Secrets and variables** →
+   **Actions**
 2. Click **Variables** tab
 3. Click **New repository variable**
 4. Name: `PROJECTS_JSON`

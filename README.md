@@ -3,47 +3,112 @@
 # SPDX-FileCopyrightText: 2025 The Linux Foundation
 -->
 
-# 🛠️ Template Action
+# 📊 Repository Reporting System
 
-This is a template for the other actions in this Github organisation.
+Comprehensive multi-repository analysis tool for Linux Foundation projects,
+providing detailed insights into Git activity, contributor patterns, and
+development practices.
 
-## actions-template
+## 🚀 Features
 
-## Usage Example
+- **📈 Git Analytics**: Commit activity, lines of code, contributor metrics
+  across configurable time windows
+- **🔍 Feature Detection**: Automatic detection of CI/CD workflows,
+  documentation, dependency management
+- **👥 Contributor Intelligence**: Author and organization analysis with
+  domain mapping
+- **🏷️ Repository Classification**: Activity-based categorization and
+  aging analysis
+- **🌐 Gerrit API Integration**: Automatic repository creation date fetching
+  for comprehensive reporting
+- **📊 Interactive HTML Tables**: Sortable, filterable, and searchable
+  data tables
+- **📋 Multi-Format Output**: JSON (data), Markdown (readable),
+  HTML (interactive), ZIP (complete)
 
-<!-- markdownlint-disable MD046 -->
+## 📖 Usage
+
+### Command Line
+
+```bash
+python3 generate_reports.py \
+  --project "O-RAN-SC" \
+  --repos-path "./gerrit-repos" \
+  --config-dir "./configuration" \
+  --output-dir "./reports" \
+  --verbose
+```
+
+### GitHub Actions Integration
 
 ```yaml
 steps:
-  - name: "Action template"
-    id: action-template
-    uses: lfreleng-actions/actions-template@main
-    with:
-      input: "placeholder"
+  - name: "Generate Repository Report"
+    run: |
+      python3 generate_reports.py \
+        --project "${{ matrix.project }}" \
+        --repos-path "./gerrit-repos" \
+        --config-dir "./configuration" \
+        --output-dir "./reports" \
+        --verbose
 ```
 
-<!-- markdownlint-enable MD046 -->
+## ⚙️ Configuration
 
-## Inputs
+Project-specific configurations in `configuration/` directory:
 
-<!-- markdownlint-disable MD013 -->
+```yaml
+# Example: O-RAN-SC.config
+project: "O-RAN-SC"
+activity_threshold_days: 548
+time_windows:
+  last_30_days: 30
+  last_365_days: 365
+gerrit:
+  enabled: true
+  host: "gerrit.o-ran-sc.org"
+html_tables:
+  sortable: true
+  searchable: true
+```
 
-| Name          | Required | Description  |
-| ------------- | -------- | ------------ |
-| input         | False    | Action input |
+## 📁 Output Structure
 
-<!-- markdownlint-enable MD013 -->
+```text
+reports/
+  <PROJECT>/
+    ├── report_raw.json           # Complete dataset
+    ├── report.md                 # Markdown report
+    ├── report.html               # Interactive HTML
+    ├── config_resolved.json      # Applied configuration
+    └── <PROJECT>_report_bundle.zip
+```
 
-## Outputs
+## 🛠️ Dependencies
 
-<!-- markdownlint-disable MD013 -->
+- Python 3.8+
+- PyYAML
+- httpx (for Gerrit API)
 
-| Name          | Description   |
-| ------------- | ------------- |
-| output        | Action output |
+Install with:
 
-<!-- markdownlint-enable MD013 -->
+```bash
+pip install -r requirements.txt
+```
 
-## Implementation Details
+## 📚 Documentation
 
-## Notes
+- [**Workflow Integration Guide**](WORKFLOW_INTEGRATION.md) - CI/CD setup and
+  configuration
+- [**Workflow Setup Guide**](WORKFLOW_SETUP.md) - Getting started with
+  GitHub Actions
+
+## 🎯 Use Cases
+
+- **Project Health Monitoring** - Track activity trends and contributor
+  engagement
+- **Resource Planning** - Identify active vs inactive repositories
+- **Community Insights** - Understand contributor patterns and organizational
+  involvement
+- **Release Planning** - Analyze development velocity and feature adoption
+- **Compliance Reporting** - Generate comprehensive project status reports

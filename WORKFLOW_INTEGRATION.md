@@ -47,7 +47,9 @@ python3 generate_reports.py \
 **Capabilities:**
 
 - ✅ **Full Git analytics** (commits, contributors, lines of code)
+- ✅ **Enhanced repository classification** (documentation, JJB, project types)
 - ✅ **Feature detection** (CI/CD, documentation, dependencies)
+- ✅ **Interactive HTML tables** (sortable, filterable, searchable)
 - ✅ **Multi-format reports** (JSON, Markdown, HTML, ZIP)
 - ✅ **Organization intelligence** with contributor mapping
 - ✅ **Configuration-driven** customization per project
@@ -178,6 +180,115 @@ configuration/
 - ✅ **Performance tuning** (worker threads, caching)
 - ✅ **Output formatting** preferences
 - ✅ **Feature detection** customization
+- ✅ **Enhanced repository classification** for better project insights
+- ✅ **Gerrit API integration** for repository creation dates
+- ✅ **Interactive HTML tables** with sorting and filtering
+
+### **Interactive HTML Tables**
+
+The HTML reports now feature powerful, user-friendly sortable and filterable
+tables using Simple-DataTables.
+
+**Configuration:**
+
+```yaml
+# HTML table configuration
+html_tables:
+  # Enable sortable/filterable tables
+  sortable: true
+
+  # Search functionality
+  searchable: true
+
+  # Pagination settings
+  pagination: true
+  entries_per_page: 25
+  page_size_options: [10, 25, 50, 100]
+
+  # Required rows to enable sorting
+  min_rows_for_sorting: 3
+```
+
+**Features:**
+
+- 🔍 **Global Search**: Search across all columns instantly
+- ⬆️⬇️ **Column Sorting**: Click headers to sort (ascending/descending)
+- 📄 **Pagination**: Browse large datasets efficiently
+- 📊 **Entries Control**: Choose the number of rows to display per page
+- ⚡ **Performance Optimized**: Enabled for tables with 3+ rows
+- 🎨 **Seamless Integration**: Matches existing report styling
+
+### **Enhanced Repository Classification**
+
+The system now provides intelligent repository classification with support for
+documentation repositories and Jenkins Job Builder (JJB) configurations.
+
+**Classification Types:**
+
+```yaml
+# Automatic detection for:
+documentation:  # README.md, docs/, mkdocs.yml, conf.py, etc.
+  indicators: ["README.md", "docs/", "mkdocs.yml", "conf.py"]
+  confidence: 90
+
+jjb:           # ci-management repositories
+  static_rule: "repo_name == 'ci-management'"
+  confidence: 100
+
+# Plus existing types: maven, gradle, node, python, docker, etc.
+```
+
+**Features:**
+
+- 📚 **Documentation Detection**: Identifies doc repos by name patterns
+  and content
+- 🔧 **JJB Classification**: Static classification for ci-management
+  repositories
+- 🧠 **Multi-indicator Analysis**: Uses distinct signals for accurate
+  classification
+- 🎯 **Priority Logic**: Documentation takes precedence over code in mixed repos
+
+**User Experience:**
+
+| Action | Description |
+|--------|-------------|
+| **Search** | Type in search box to filter across all table data |
+| **Sort** | Click any column header to sort (click again to reverse) |
+| **Navigate** | Use pagination controls to browse through results |
+| **Resize** | Change "entries per page" to show more/fewer rows |
+
+### **Gerrit API Integration**
+
+The system can automatically fetch repository creation dates from Gerrit
+servers for repositories that have no commits. This eliminates "Unknown"
+creation dates in reports.
+
+**Configuration:**
+
+```yaml
+# Enable Gerrit API integration
+gerrit:
+  enabled: true
+  host: "gerrit.o-ran-sc.org"        # Required: Gerrit server hostname
+  base_url: ""                       # Optional: API base URL (auto-discovered)
+  timeout: 30.0                      # Optional: Request timeout in seconds
+```
+
+**Features:**
+
+- 🔍 **Auto-discovery**: Automatically finds the correct API endpoint path
+- 🌐 **Common patterns**: Tests standard paths (`/r`, `/gerrit`, `/infra`, `/a`)
+- 🔄 **Redirect following**: Follows server redirects to find API location
+- ⚡ **Graceful fallback**: Reports continue to work if Gerrit API is unavailable
+
+**Supported Gerrit Configurations:**
+
+| Server Type | Base URL Pattern | Example |
+|-------------|------------------|---------|
+| Standard | `https://host/r` | `gerrit.o-ran-sc.org/r` |
+| OpenDaylight | `https://host/gerrit` | `git.opendaylight.org/gerrit` |
+| Linux Foundation | `https://host/infra` | `gerrit.linuxfoundation.org/infra` |
+| Custom | Manual configuration | Set `base_url` explicitly |
 
 ### **Example Project Configuration**
 
@@ -188,6 +299,9 @@ output:
   top_n_repos: 60
   bottom_n_repos: 30
 activity_threshold_days: 365
+gerrit:
+  enabled: true
+  host: "gerrit.onap.org"
 performance:
   max_workers: 16
   cache: true
@@ -279,7 +393,10 @@ Typical Performance (100+ repositories):
 
 ```bash
 # Test configuration validation
-python generate_reports.py --project ONAP --repos-path ./test-repos --check-config
+python generate_reports.py \
+  --project ONAP \
+  --repos-path ./test-repos \
+  --check-config
 
 # Test full analysis
 python generate_reports.py --project ONAP --repos-path ./test-repos --verbose
@@ -358,8 +475,25 @@ New: reports-PROJECT/
 - ✅ **Contributor analytics** with organization mapping
 - ✅ **Feature detection** results across repositories
 - ✅ **Activity trends** and aging analysis
+- ✅ **Enhanced repository classification** and project type detection
 - ✅ **Performance metrics** and repository health
 - ✅ **Professional formatting** in JSON, Markdown, HTML, and ZIP formats
+- ✅ **Interactive HTML reports** with sortable and filterable data tables
+
+### **Report Structure Changes**
+
+The report sections follow this information hierarchy:
+
+1. **📈 Global Summary** - Project statistics
+2. **🏢 Top Organizations** - Key contributing organizations
+3. **🏅 Top Contributors** - Leading individual contributors
+4. **📅 Repository Activity Distribution** - Activity categorization
+5. **🏆 Top Active Repositories** - Most active projects
+6. **📉 Least Active Repositories** - Repositories needing attention
+7. **📝 Repositories with No Commits** - Unused repositories
+8. **🔧 Repository Feature Matrix** - Feature adoption analysis
+9. **📋 Report Metadata** - Technical details and configuration
+10. **✅ Deployed GitHub Workflows** - CI/CD workflow telemetry (moved to end)
 
 ---
 
@@ -387,6 +521,23 @@ Solution: Check Python dependencies and configuration syntax
 Cause: Some repositories failed individual processing
 Status: ✅ Normal - system designed to continue on partial failures
 Action: Check error list in JSON output for specific repository issues
+```
+
+#### **"Gerrit API connection failed"**
+
+```text
+Cause: Gerrit server unreachable or API discovery failed
+Status: ⚠️ Degraded - repositories with no commits will show "Unknown"
+creation dates
+Action: Verify Gerrit host configuration and network connectivity
+```
+
+#### **"Could not discover Gerrit API endpoint"**
+
+```text
+Cause: Auto-discovery failed to find working API path
+Solution: Manually specify base_url in configuration
+Example: base_url: "https://your-gerrit.org/r"
 ```
 
 ### **Debug Mode**
@@ -437,6 +588,8 @@ python generate_reports.py \
 - 🔍 **Advanced analytics** - Code quality and security metrics
 - 🔄 **API integration** - GitHub/Gerrit API for extra data
 - 📱 **Mobile optimization** - Responsive report layouts
+- 🎛️ **Advanced table controls** - Multi-column filtering and custom sorting
+- 🏷️ **Smart classification** - AI-powered repository categorization
 
 ---
 
@@ -445,7 +598,8 @@ python generate_reports.py \
 ### **Resources**
 
 - **Implementation Documentation:** `REPORT_IMPLEMENTATION.md`
-- **Phase Completion Reports:** `PHASE1_COMPLETION.md` through `PHASE6_COMPLETION.md`
+- **Phase Completion Reports:** `PHASE1_COMPLETION.md` through
+  `PHASE6_COMPLETION.md`
 - **Configuration Reference:** `configuration/template.config`
 - **Test Suite:** `test_phase*.py` (35+ tests available)
 

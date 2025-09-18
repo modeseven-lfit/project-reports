@@ -35,11 +35,18 @@ import tempfile
 import zipfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union, cast
+from urllib.parse import urljoin, urlparse
 
 try:
     import yaml  # type: ignore
 except ImportError:
     print("ERROR: PyYAML is required. Install with: pip install PyYAML", file=sys.stderr)
+    sys.exit(1)
+
+try:
+    import httpx  # type: ignore
+except ImportError:
+    print("ERROR: httpx is required. Install with: pip install httpx", file=sys.stderr)
     sys.exit(1)
 
 # =============================================================================
@@ -185,6 +192,196 @@ def setup_time_windows(config: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return windows
 
 # =============================================================================
+# GERRIT API INTEGRATION
+# =============================================================================
+
+class GerritAPIError(Exception):
+    """Base exception for Gerrit API errors."""
+    pass
+
+class GerritConnectionError(Exception):
+    """Raised when connection to Gerrit server fails."""
+    pass
+
+class GerritAPIDiscovery:
+    """Discovers the correct Gerrit API base URL for a given host."""
+
+    # Common Gerrit API path patterns to test
+    COMMON_PATHS = [
+        "",  # Direct: https://host/
+        "/r",  # Standard: https://host/r/
+        "/gerrit",  # OpenDaylight style: https://host/gerrit/
+        "/infra",  # Linux Foundation style: https://host/infra/
+        "/a",  # Authenticated API: https://host/a/
+    ]
+
+    def __init__(self, timeout: float = 30.0):
+        """Initialize discovery client."""
+        self.timeout = timeout
+        self.client = httpx.Client(
+            timeout=httpx.Timeout(timeout, connect=10.0),
+            follow_redirects=True,
+            headers={
+                "User-Agent": "repository-reports/1.0.0",
+                "Accept": "application/json",
+            },
+        )
+
+    def __enter__(self):
+        """Enter context manager."""
+        return self
+
+    def __exit__(self, *args):
+        """Exit context manager and cleanup."""
+        self.close()
+
+    def close(self):
+        """Close HTTP client."""
+        if hasattr(self, "client"):
+            self.client.close()
+
+    def discover_base_url(self, host: str) -> str:
+        """Discover the correct API base URL for a Gerrit host."""
+        logging.debug(f"Starting API discovery for host: {host}")
+
+        # First, try to follow redirects from the base URL
+        redirect_path = self._discover_via_redirect(host)
+        if redirect_path:
+            test_paths = [redirect_path] + [p for p in self.COMMON_PATHS if p != redirect_path]
+        else:
+            test_paths = self.COMMON_PATHS
+
+        # Test each potential path
+        for path in test_paths:
+            base_url = f"https://{host}{path}"
+            logging.debug(f"Testing API endpoint: {base_url}")
+
+            if self._test_projects_api(base_url):
+                logging.debug(f"Discovered working API base URL: {base_url}")
+                return base_url
+
+        # If all paths fail, raise an error
+        raise GerritAPIError(
+            f"Could not discover Gerrit API endpoint for {host}. "
+            f"Tested paths: {test_paths}"
+        )
+
+    def _discover_via_redirect(self, host: str) -> Optional[str]:
+        """Attempt to discover the API path by following redirects."""
+        try:
+            response = self.client.get(f"https://{host}", follow_redirects=False)
+            if response.status_code in (301, 302, 303, 307, 308):
+                location = response.headers.get("location")
+                if location:
+                    parsed = urlparse(location)
+                    if parsed.netloc == host or not parsed.netloc:
+                        path = parsed.path.rstrip("/")
+                        if path and path != "/":
+                            return path
+        except Exception as e:
+            logging.debug(f"Error checking redirects for {host}: {e}")
+        return None
+
+    def _test_projects_api(self, base_url: str) -> bool:
+        """Test if the projects API is available at the given base URL."""
+        try:
+            projects_url = urljoin(base_url.rstrip("/") + "/", "projects/?d")
+            response = self.client.get(projects_url)
+
+            if response.status_code == 200:
+                return self._validate_projects_response(response.text)
+            return False
+        except Exception as e:
+            logging.debug(f"Error testing projects API at {base_url}: {e}")
+            return False
+
+    def _validate_projects_response(self, response_text: str) -> bool:
+        """Validate that the response looks like a valid Gerrit projects API response."""
+        try:
+            # Strip Gerrit's security prefix
+            if response_text.startswith(")]}'"):
+                json_text = response_text[4:]
+            else:
+                json_text = response_text
+
+            data = json.loads(json_text)
+            return isinstance(data, dict)
+        except Exception:
+            return False
+
+class GerritAPIClient:
+    """Client for interacting with Gerrit REST API."""
+
+    def __init__(self, host: str, base_url: Optional[str] = None, timeout: float = 30.0):
+        """Initialize Gerrit API client."""
+        self.host = host
+        self.timeout = timeout
+
+        if base_url:
+            self.base_url = base_url
+        else:
+            # Auto-discover the base URL
+            with GerritAPIDiscovery(timeout) as discovery:
+                self.base_url = discovery.discover_base_url(host)
+
+        self.client = httpx.Client(
+            base_url=self.base_url,
+            timeout=httpx.Timeout(timeout, connect=10.0),
+            follow_redirects=True,
+            headers={
+                "User-Agent": "repository-reports/1.0.0",
+                "Accept": "application/json",
+            },
+        )
+
+    def __enter__(self):
+        """Enter context manager."""
+        return self
+
+    def __exit__(self, *args):
+        """Exit context manager and cleanup."""
+        self.close()
+
+    def close(self):
+        """Close HTTP client."""
+        if hasattr(self, "client"):
+            self.client.close()
+
+    def get_project_info(self, project_name: str) -> Optional[dict[str, Any]]:
+        """Get detailed information about a specific project."""
+        try:
+            # Use the projects API with detailed information
+            response = self.client.get(f"/projects/{project_name.replace('/', '%2F')}?d")
+
+            if response.status_code == 200:
+                return self._parse_json_response(response.text)
+            elif response.status_code == 404:
+                logging.warning(f"Project not found in Gerrit: {project_name}")
+                return None
+            else:
+                logging.warning(f"Gerrit API returned {response.status_code} for project {project_name}")
+                return None
+
+        except Exception as e:
+            logging.error(f"Error fetching project info for {project_name}: {e}")
+            return None
+
+    def _parse_json_response(self, response_text: str) -> dict[str, Any]:
+        """Parse Gerrit JSON response, handling magic prefix."""
+        # Remove Gerrit's magic prefix if present
+        if response_text.startswith(")]}'"):
+            clean_text = response_text[4:].lstrip()
+        else:
+            clean_text = response_text
+
+        try:
+            result = json.loads(clean_text)
+            return result if isinstance(result, dict) else {}
+        except json.JSONDecodeError as e:
+            logging.error(f"Invalid JSON response: {e}")
+            return {}
+
+# =============================================================================
 # GIT DATA COLLECTION (Phase 2 - TODO)
 # =============================================================================
 
@@ -200,6 +397,29 @@ class GitDataCollector:
         if self.cache_enabled:
             self.cache_dir = Path(tempfile.gettempdir()) / "repo_reporting_cache"
             self.cache_dir.mkdir(exist_ok=True)
+
+        # Initialize Gerrit API client if configured
+        self.gerrit_client = None
+        gerrit_config = config.get("gerrit", {})
+        if gerrit_config.get("enabled", False):
+            host = gerrit_config.get("host")
+            base_url = gerrit_config.get("base_url")
+            timeout = gerrit_config.get("timeout", 30.0)
+
+            if host:
+                try:
+                    self.gerrit_client = GerritAPIClient(host, base_url, timeout)
+                    self.logger.info(f"Initialized Gerrit API client for {host}")
+                except Exception as e:
+                    self.logger.warning(f"Failed to initialize Gerrit API client: {e}")
+
+    def __del__(self):
+        """Cleanup Gerrit client when GitDataCollector is destroyed."""
+        if hasattr(self, 'gerrit_client') and self.gerrit_client:
+            try:
+                self.gerrit_client.close()
+            except Exception:
+                pass  # Ignore cleanup errors
 
     def collect_repo_git_metrics(self, repo_path: Path) -> dict[str, Any]:
         """
@@ -499,6 +719,9 @@ class GitDataCollector:
 
                 except ValueError as e:
                     self.logger.warning(f"Could not parse last commit date for {repo_name}: {e}")
+        else:
+            # No commits found - try to get creation date from Gerrit API
+            self._fetch_creation_date_from_gerrit(repo_metrics, repo_name)
 
         # Convert author repository sets to counts for JSON serialization
         for author_email, author_data in metrics["authors"].items():
@@ -521,6 +744,36 @@ class GitDataCollector:
             repo_authors.append(author_record)
 
         metrics["repository"]["authors"] = repo_authors
+
+    def _fetch_creation_date_from_gerrit(self, repo_metrics: dict[str, Any], repo_name: str) -> None:
+        """Fetch repository creation date from Gerrit API for repos with no commits."""
+        if not self.gerrit_client:
+            self.logger.debug(f"No Gerrit client available for {repo_name}")
+            return
+
+        try:
+            project_info = self.gerrit_client.get_project_info(repo_name)
+            if project_info and "created" in project_info:
+                creation_date_str = project_info["created"]
+                try:
+                    # Parse Gerrit timestamp format (typically RFC 3339)
+                    creation_date = datetime.datetime.fromisoformat(creation_date_str.replace('Z', '+00:00'))
+                    repo_metrics["creation_timestamp"] = creation_date.isoformat()
+
+                    # Calculate days since creation
+                    now = datetime.datetime.now(datetime.timezone.utc)
+                    days_since = (now - creation_date).days
+                    repo_metrics["days_since_creation"] = days_since
+
+                    self.logger.debug(f"Retrieved creation date for {repo_name}: {creation_date_str}")
+
+                except ValueError as e:
+                    self.logger.warning(f"Could not parse creation date for {repo_name}: {e}")
+            else:
+                self.logger.debug(f"No creation date found in Gerrit for {repo_name}")
+
+        except Exception as e:
+            self.logger.error(f"Error fetching creation date from Gerrit for {repo_name}: {e}")
 
     def _get_repo_cache_key(self, repo_path: Path) -> Optional[str]:
         """Generate a cache key based on the repository's HEAD commit hash."""
@@ -814,7 +1067,25 @@ class FeatureRegistry:
         }
 
     def _check_project_types(self, repo_path: Path) -> dict[str, Any]:
-        """Detect project types based on configuration files."""
+        """Detect project types based on configuration files and repository characteristics."""
+        repo_name = repo_path.name.lower()
+
+        # Static classifications based on repository names
+        if repo_name == "ci-management":
+            return {
+                "detected_types": ["jjb"],
+                "primary_type": "jjb",
+                "details": [{"type": "jjb", "files": ["repository_name"], "confidence": 100}]
+            }
+
+        # Check for documentation repositories
+        if self._is_documentation_repository(repo_path):
+            return {
+                "detected_types": ["documentation"],
+                "primary_type": "documentation",
+                "details": [{"type": "documentation", "files": self._get_doc_indicators(repo_path), "confidence": 90}]
+            }
+
         project_types = {
             "maven": ["pom.xml"],
             "gradle": ["build.gradle", "build.gradle.kts", "gradle.properties", "settings.gradle"],
@@ -870,6 +1141,68 @@ class FeatureRegistry:
             "primary_type": primary_type,
             "details": detected_types
         }
+
+    def _is_documentation_repository(self, repo_path: Path) -> bool:
+        """Determine if a repository is primarily for documentation."""
+        repo_name = repo_path.name.lower()
+
+        # Check repository name patterns
+        doc_name_patterns = ["doc", "docs", "documentation", "manual", "wiki", "guide", "tutorial"]
+        if any(pattern in repo_name for pattern in doc_name_patterns):
+            return True
+
+        # Check directory structure and file patterns
+        doc_indicators = self._get_doc_indicators(repo_path)
+        return len(doc_indicators) >= 3  # Require multiple indicators
+
+    def _get_doc_indicators(self, repo_path: Path) -> list[str]:
+        """Get list of documentation indicators found in the repository."""
+        indicators = []
+
+        # Check for common documentation files
+        doc_files = [
+            "README.md", "README.rst", "README.txt",
+            "DOCS.md", "DOCUMENTATION.md",
+            "index.md", "index.rst", "index.html",
+            "sphinx.conf", "conf.py",  # Sphinx
+            "mkdocs.yml", "_config.yml",  # MkDocs/Jekyll
+            "Gemfile"  # Jekyll
+        ]
+
+        for doc_file in doc_files:
+            if (repo_path / doc_file).exists():
+                indicators.append(doc_file)
+
+        # Check for documentation directories
+        doc_dirs = ["docs", "doc", "documentation", "_docs", "manual", "guides", "tutorials"]
+        for doc_dir in doc_dirs:
+            if (repo_path / doc_dir).is_dir():
+                indicators.append(f"{doc_dir}/")
+
+        # Check for common documentation file extensions in root
+        try:
+            doc_extensions = [".md", ".rst", ".adoc", ".txt"]
+            for ext in doc_extensions:
+                if list(repo_path.glob(f"*{ext}")):
+                    indicators.append(f"*{ext}")
+        except OSError:
+            pass
+
+        # Check for static site generators
+        static_generators = [
+            ".gitbook",  # GitBook
+            "_config.yml",  # Jekyll
+            "mkdocs.yml",  # MkDocs
+            "conf.py",  # Sphinx
+            "book.toml",  # mdBook
+            "docusaurus.config.js"  # Docusaurus
+        ]
+
+        for generator in static_generators:
+            if (repo_path / generator).exists():
+                indicators.append(generator)
+
+        return indicators
 
     def _check_workflows(self, repo_path: Path) -> dict[str, Any]:
         """Analyze GitHub workflows."""
@@ -1059,6 +1392,8 @@ class DataAggregator:
                     elif age_years > old_years:
                         old_repos.append(repo)
                     else:
+                        # Recent inactive: inactive but less than old_years threshold
+                        # This should only include repos inactive for less than old_years
                         recent_inactive_repos.append(repo)
 
         # Aggregate author and organization data
@@ -1318,7 +1653,7 @@ class DataAggregator:
 # =============================================================================
 
 class ReportRenderer:
-    """Handles rendering of reports in various formats."""
+    """Handles rendering of aggregated data into various output formats."""
 
     def __init__(self, config: dict[str, Any], logger: logging.Logger) -> None:
         self.config = config
@@ -1395,7 +1730,15 @@ class ReportRenderer:
         # Global summary
         sections.append(self._generate_summary_section(data))
 
-        # Activity distribution
+        # Organizations (moved up)
+        if include_sections.get("organizations", True):
+            sections.append(self._generate_organizations_section(data))
+
+        # Contributors (moved up)
+        if include_sections.get("contributors", True):
+            sections.append(self._generate_contributors_section(data))
+
+        # Repository activity distribution (renamed)
         if include_sections.get("inactive_distributions", True):
             sections.append(self._generate_activity_distribution_section(data))
 
@@ -1408,23 +1751,15 @@ class ReportRenderer:
         # Repositories with no commits
         sections.append(self._generate_no_commit_repositories_section(data))
 
-        # Deployed GitHub workflows telemetry
-        sections.append(self._generate_deployed_workflows_section(data))
-
-        # Contributors
-        if include_sections.get("contributors", True):
-            sections.append(self._generate_contributors_section(data))
-
-        # Organizations
-        if include_sections.get("organizations", True):
-            sections.append(self._generate_organizations_section(data))
-
         # Repository feature matrix
         if include_sections.get("repo_feature_matrix", True):
             sections.append(self._generate_feature_matrix_section(data))
 
         # Appendix
         sections.append(self._generate_appendix_section(data))
+
+        # Deployed GitHub workflows telemetry (moved to last)
+        sections.append(self._generate_deployed_workflows_section(data))
 
         return "\n\n".join(sections)
 
@@ -1484,7 +1819,7 @@ class ReportRenderer:
 | Total Commits | {self._format_number(total_commits)} | - |"""
 
     def _generate_activity_distribution_section(self, data: dict[str, Any]) -> str:
-        """Generate activity distribution section."""
+        """Generate repository activity distribution section."""
         activity_dist = data.get("summaries", {}).get("activity_distribution", {})
 
         very_old = activity_dist.get("very_old", [])
@@ -1492,20 +1827,26 @@ class ReportRenderer:
         recent_inactive = activity_dist.get("recent_inactive", [])
 
         if not (very_old or old or recent_inactive):
-            return "## 📅 Activity Distribution\n\nAll repositories are currently active! 🎉"
+            return "## 📅 Repository Activity Distribution\n\nAll repositories are currently active! 🎉"
 
-        sections = ["## 📅 Activity Distribution"]
+        sections = ["## 📅 Repository Activity Distribution"]
 
         if very_old:
-            sections.append("### 🔴 Very Old (>3 years inactive)")
+            very_old_years = self.config.get("age_buckets", {}).get("very_old_years", 3)
+            sections.append(f"### 🔴 Very Old (>{very_old_years} years inactive)")
             sections.append(self._generate_activity_table(very_old))
 
         if old:
-            sections.append("### 🟡 Old (1-3 years inactive)")
+            old_years = self.config.get("age_buckets", {}).get("old_years", 1)
+            very_old_years = self.config.get("age_buckets", {}).get("very_old_years", 3)
+            sections.append(f"### 🟡 Old ({old_years}-{very_old_years} years inactive)")
             sections.append(self._generate_activity_table(old))
 
         if recent_inactive:
-            sections.append("### ⚠️ Recent Inactive (<1 year)")
+            # Use the actual old_years threshold from config for the heading
+            old_years_threshold = self.config.get("age_buckets", {}).get("old_years", 1)
+            year_text = "year" if old_years_threshold == 1 else "years"
+            sections.append(f"### ⚠️ Recent Inactive (<{old_years_threshold} {year_text})")
             sections.append(self._generate_activity_table(recent_inactive))
 
         return "\n\n".join(sections)
@@ -1586,10 +1927,16 @@ class ReportRenderer:
             commits_1y = repo.get("commit_counts", {}).get("last_365_days", 0)
             age_str = self._format_age(days_since)
 
-            # Categorize by age
-            if days_since > (3 * 365):
+            # Categorize by age using config values
+            very_old_years = self.config.get("age_buckets", {}).get("very_old_years", 3)
+            old_years = self.config.get("age_buckets", {}).get("old_years", 1)
+
+            days_to_years = 365.25
+            age_years = days_since / days_to_years
+
+            if age_years > very_old_years:
                 category = "🔴 Very Old"
-            elif days_since > 365:
+            elif age_years > old_years:
                 category = "🟡 Old"
             else:
                 category = "⚠️ Recent"
@@ -1821,6 +2168,7 @@ class ReportRenderer:
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Repository Analysis Report</title>
+    {self._get_datatable_css()}
     <style>
         body {{
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
@@ -1906,10 +2254,63 @@ class ReportRenderer:
             border-top: 1px solid #ecf0f1;
             color: #7f8c8d;
         }}
+
+        /* Custom styles for Simple-DataTables integration */
+        .dataTable-wrapper {{
+            margin: 1em 0;
+        }}
+
+        .dataTable-top, .dataTable-bottom {{
+            padding: 8px 0;
+        }}
+
+        .dataTable-search {{
+            margin-bottom: 1em;
+        }}
+
+        .dataTable-search input {{
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+            width: 250px;
+        }}
+
+        .dataTable-selector select {{
+            padding: 6px 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }}
+
+        .dataTable-info {{
+            color: #666;
+            font-size: 14px;
+        }}
+
+        .dataTable-pagination a {{
+            padding: 6px 12px;
+            margin: 0 2px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            text-decoration: none;
+            color: #2c3e50;
+        }}
+
+        .dataTable-pagination a:hover {{
+            background-color: #e8f4f8;
+        }}
+
+        .dataTable-pagination a.active {{
+            background-color: #3498db;
+            color: white;
+            border-color: #3498db;
+        }}
     </style>
 </head>
 <body>
     {html_body}
+    {self._get_datatable_js()}
 </body>
 </html>"""
 
@@ -1941,7 +2342,13 @@ class ReportRenderer:
             # Tables
             elif '|' in line and line.strip():
                 if not in_table:
-                    html_lines.append('<table>')
+                    # Check if this table will have headers by looking ahead
+                    has_headers = (i + 1 < len(lines) and
+                                 re.match(r'^\|[\s\-\|]+\|$', lines[i + 1].strip()))
+                    # Only add sortable class if feature is enabled and table has headers
+                    sortable_enabled = self.config.get("html_tables", {}).get("sortable", True)
+                    table_class = ' class="sortable"' if (has_headers and sortable_enabled) else ''
+                    html_lines.append(f'<table{table_class}>')
                     in_table = True
 
                 # Check if this is a header separator line
@@ -1997,6 +2404,63 @@ class ReportRenderer:
             html_lines.append('</tbody></table>')
 
         return '\n'.join(html_lines)
+
+    def _get_datatable_css(self) -> str:
+        """Get Simple-DataTables CSS if sorting is enabled."""
+        if not self.config.get("html_tables", {}).get("sortable", True):
+            return ""
+
+        return '''
+    <!-- Simple-DataTables CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/simple-datatables@latest/dist/style.css" rel="stylesheet" type="text/css">
+    '''
+
+    def _get_datatable_js(self) -> str:
+        """Get Simple-DataTables JavaScript if sorting is enabled."""
+        if not self.config.get("html_tables", {}).get("sortable", True):
+            return ""
+
+        min_rows = self.config.get("html_tables", {}).get("min_rows_for_sorting", 3)
+        searchable = str(self.config.get("html_tables", {}).get("searchable", True)).lower()
+        sortable = str(self.config.get("html_tables", {}).get("sortable", True)).lower()
+        pagination = str(self.config.get("html_tables", {}).get("pagination", True)).lower()
+        per_page = self.config.get("html_tables", {}).get("entries_per_page", 25)
+        page_options = self.config.get("html_tables", {}).get("page_size_options", [10, 25, 50, 100])
+
+        return f'''
+    <!-- Simple-DataTables JavaScript -->
+    <script src="https://cdn.jsdelivr.net/npm/simple-datatables@latest" type="text/javascript"></script>
+    <script>
+        // Initialize Simple-DataTables on all tables with the sortable class
+        document.addEventListener('DOMContentLoaded', function() {{
+            const tables = document.querySelectorAll('table.sortable');
+            tables.forEach(function(table) {{
+                // Skip tables that are too small to benefit from sorting
+                const rows = table.querySelectorAll('tbody tr');
+                if (rows.length < {min_rows}) {{
+                    return;
+                }}
+
+                new simpleDatatables.DataTable(table, {{
+                    searchable: {searchable},
+                    sortable: {sortable},
+                    paging: {pagination},
+                    perPage: {per_page},
+                    perPageSelect: {page_options},
+                    classes: {{
+                        active: "active",
+                        disabled: "disabled"
+                    }},
+                    labels: {{
+                        placeholder: "Search repositories, contributors, etc...",
+                        perPage: "entries per page",
+                        noRows: "No entries found",
+                        info: "Showing {{start}} to {{end}} of {{rows}} entries"
+                    }}
+                }});
+            }});
+        }});
+    </script>'''
 
     def _slugify(self, text: str) -> str:
         """Convert text to URL-friendly slug."""
