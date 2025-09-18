@@ -350,20 +350,28 @@ class GerritAPIClient:
     def get_project_info(self, project_name: str) -> Optional[dict[str, Any]]:
         """Get detailed information about a specific project."""
         try:
-            # Use the projects API with detailed information
-            response = self.client.get(f"/projects/{project_name.replace('/', '%2F')}?d")
+            # URL-encode the project name and use the projects API with detailed information
+            encoded_name = project_name.replace('/', '%2F')
+            url = f"/projects/{encoded_name}?d"
+
+            logging.debug(f"Making Gerrit API request: {self.base_url}{url}")
+            response = self.client.get(url)
 
             if response.status_code == 200:
-                return self._parse_json_response(response.text)
+                result = self._parse_json_response(response.text)
+                logging.debug(f"Successfully fetched project info for {project_name}")
+                return result
             elif response.status_code == 404:
                 logging.warning(f"Project not found in Gerrit: {project_name}")
                 return None
             else:
-                logging.warning(f"Gerrit API returned {response.status_code} for project {project_name}")
+                logging.error(f"Gerrit API returned {response.status_code} for project {project_name}: {response.text}")
                 return None
 
         except Exception as e:
             logging.error(f"Error fetching project info for {project_name}: {e}")
+            import traceback
+            logging.debug(f"Full traceback: {traceback.format_exc()}")
             return None
 
     def _parse_json_response(self, response_text: str) -> dict[str, Any]:
@@ -400,18 +408,21 @@ class GitDataCollector:
 
         # Initialize Gerrit API client if configured
         self.gerrit_client = None
-        gerrit_config = config.get("gerrit", {})
+        gerrit_config = self.config.get("gerrit", {})
         if gerrit_config.get("enabled", False):
             host = gerrit_config.get("host")
             base_url = gerrit_config.get("base_url")
             timeout = gerrit_config.get("timeout", 30.0)
-
             if host:
                 try:
                     self.gerrit_client = GerritAPIClient(host, base_url, timeout)
-                    self.logger.info(f"Initialized Gerrit API client for {host}")
+                    self.logger.info(f"Initialized Gerrit API client for {host} with base_url: {self.gerrit_client.base_url}")
                 except Exception as e:
-                    self.logger.warning(f"Failed to initialize Gerrit API client: {e}")
+                    self.logger.error(f"Failed to initialize Gerrit API client for {host}: {e}")
+            else:
+                self.logger.warning("Gerrit enabled but no host configured")
+        else:
+            self.logger.debug("Gerrit API client disabled in configuration")
 
     def __del__(self):
         """Cleanup Gerrit client when GitDataCollector is destroyed."""
@@ -748,32 +759,40 @@ class GitDataCollector:
     def _fetch_creation_date_from_gerrit(self, repo_metrics: dict[str, Any], repo_name: str) -> None:
         """Fetch repository creation date from Gerrit API for repos with no commits."""
         if not self.gerrit_client:
-            self.logger.debug(f"No Gerrit client available for {repo_name}")
+            self.logger.warning(f"No Gerrit client available for {repo_name} - creation date will be missing")
             return
 
         try:
+            self.logger.debug(f"Fetching creation date from Gerrit for project: {repo_name}")
             project_info = self.gerrit_client.get_project_info(repo_name)
-            if project_info and "created" in project_info:
-                creation_date_str = project_info["created"]
-                try:
-                    # Parse Gerrit timestamp format (typically RFC 3339)
-                    creation_date = datetime.datetime.fromisoformat(creation_date_str.replace('Z', '+00:00'))
-                    repo_metrics["creation_timestamp"] = creation_date.isoformat()
 
-                    # Calculate days since creation
-                    now = datetime.datetime.now(datetime.timezone.utc)
-                    days_since = (now - creation_date).days
-                    repo_metrics["days_since_creation"] = days_since
+            if project_info:
+                self.logger.debug(f"Received project info for {repo_name}: {list(project_info.keys())}")
+                if "created" in project_info:
+                    creation_date_str = project_info["created"]
+                    try:
+                        # Parse Gerrit timestamp format (typically RFC 3339)
+                        creation_date = datetime.datetime.fromisoformat(creation_date_str.replace('Z', '+00:00'))
+                        repo_metrics["creation_timestamp"] = creation_date.isoformat()
 
-                    self.logger.debug(f"Retrieved creation date for {repo_name}: {creation_date_str}")
+                        # Calculate days since creation
+                        now = datetime.datetime.now(datetime.timezone.utc)
+                        days_since = (now - creation_date).days
+                        repo_metrics["days_since_creation"] = days_since
 
-                except ValueError as e:
-                    self.logger.warning(f"Could not parse creation date for {repo_name}: {e}")
+                        self.logger.info(f"Retrieved creation date for {repo_name}: {creation_date_str} ({days_since} days ago)")
+
+                    except ValueError as e:
+                        self.logger.error(f"Could not parse creation date '{creation_date_str}' for {repo_name}: {e}")
+                else:
+                    self.logger.warning(f"No 'created' field in Gerrit project info for {repo_name}")
             else:
-                self.logger.debug(f"No creation date found in Gerrit for {repo_name}")
+                self.logger.warning(f"No project info returned from Gerrit for {repo_name}")
 
         except Exception as e:
             self.logger.error(f"Error fetching creation date from Gerrit for {repo_name}: {e}")
+            import traceback
+            self.logger.debug(f"Full traceback: {traceback.format_exc()}")
 
     def _get_repo_cache_key(self, repo_path: Path) -> Optional[str]:
         """Generate a cache key based on the repository's HEAD commit hash."""
@@ -1361,13 +1380,15 @@ class DataAggregator:
         recent_inactive_repos = []
 
         total_commits = 0
+        total_lines_added = 0
         no_commit_repos = []  # Separate list for repositories with no commits
 
         for repo in repo_metrics:
             days_since_last = repo.get("days_since_last_commit")
 
-            # Count total commits
+            # Count total commits and lines of code
             total_commits += repo.get("commit_counts", {}).get(primary_window, 0)
+            total_lines_added += repo.get("loc_stats", {}).get(primary_window, {}).get("added", 0)
 
             # Check if repository has no commits at all
             has_any_commits = any(count > 0 for count in repo.get("commit_counts", {}).values())
@@ -1450,6 +1471,7 @@ class DataAggregator:
                 "inactive_repositories": len(inactive_repos),
                 "no_commit_repositories": len(no_commit_repos),
                 "total_commits": total_commits,
+                "total_lines_added": total_lines_added,
                 "total_authors": len(authors),
                 "total_organizations": len(organizations),
             },
@@ -1755,11 +1777,11 @@ class ReportRenderer:
         if include_sections.get("repo_feature_matrix", True):
             sections.append(self._generate_feature_matrix_section(data))
 
-        # Appendix
-        sections.append(self._generate_appendix_section(data))
-
-        # Deployed GitHub workflows telemetry (moved to last)
+        # Deployed GitHub workflows telemetry
         sections.append(self._generate_deployed_workflows_section(data))
+
+        # Appendix (moved to last)
+        sections.append(self._generate_appendix_section(data))
 
         return "\n\n".join(sections)
 
@@ -1798,6 +1820,7 @@ class ReportRenderer:
         inactive_repos = counts.get("inactive_repositories", 0)
         no_commit_repos = counts.get("no_commit_repositories", 0)
         total_commits = counts.get("total_commits", 0)
+        total_lines_added = counts.get("total_lines_added", 0)
         total_authors = counts.get("total_authors", 0)
         total_orgs = counts.get("total_organizations", 0)
 
@@ -1816,7 +1839,8 @@ class ReportRenderer:
 | No Commits | {self._format_number(no_commit_repos)} | {no_commit_pct:.1f}% |
 | Total Contributors | {self._format_number(total_authors)} | - |
 | Organizations | {self._format_number(total_orgs)} | - |
-| Total Commits | {self._format_number(total_commits)} | - |"""
+| Total Commits | {self._format_number(total_commits)} | - |
+| Total Lines Added | {self._format_number(total_lines_added)} | - |"""
 
     def _generate_activity_distribution_section(self, data: dict[str, Any]) -> str:
         """Generate repository activity distribution section."""
@@ -2154,7 +2178,7 @@ class ReportRenderer:
 **Report Generation:** This report was generated by the Repository Reporting System, analyzing Git repository data and features to provide comprehensive insights into project activity, contributor patterns, and development practices.
 
 ---
-*Generated with ❤️ by Repository Reporting System*"""
+*Generated with ❤️ by Release Engineering*"""
 
     def _convert_markdown_to_html(self, markdown_content: str) -> str:
         """Convert Markdown content to HTML with embedded CSS."""
@@ -2273,7 +2297,8 @@ class ReportRenderer:
             border: 1px solid #ddd;
             border-radius: 4px;
             font-size: 14px;
-            width: 250px;
+            width: 400px;
+            max-width: 90%;
         }}
 
         .dataTable-selector select {{
@@ -2424,8 +2449,8 @@ class ReportRenderer:
         searchable = str(self.config.get("html_tables", {}).get("searchable", True)).lower()
         sortable = str(self.config.get("html_tables", {}).get("sortable", True)).lower()
         pagination = str(self.config.get("html_tables", {}).get("pagination", True)).lower()
-        per_page = self.config.get("html_tables", {}).get("entries_per_page", 25)
-        page_options = self.config.get("html_tables", {}).get("page_size_options", [10, 25, 50, 100])
+        per_page = self.config.get("html_tables", {}).get("entries_per_page", 50)
+        page_options = self.config.get("html_tables", {}).get("page_size_options", [20, 50, 100, 200])
 
         return f'''
     <!-- Simple-DataTables JavaScript -->
@@ -2452,7 +2477,7 @@ class ReportRenderer:
                         disabled: "disabled"
                     }},
                     labels: {{
-                        placeholder: "Search repositories, contributors, etc...",
+                        placeholder: "Search repositories, contributors, organizations, and more...",
                         perPage: "entries per page",
                         noRows: "No entries found",
                         info: "Showing {{start}} to {{end}} of {{rows}} entries"
