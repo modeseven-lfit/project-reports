@@ -902,7 +902,7 @@ class FeatureRegistry:
             return {"count": 0, "classified": {"verify": 0, "merge": 0, "other": 0}, "files": []}
 
         # Extract just the workflow names for telemetry
-        workflow_names = [workflow_info["filename"] for workflow_info in workflow_files]
+        workflow_names = [workflow_info["name"] for workflow_info in workflow_files]
 
         return {
             "count": len(workflow_files),
@@ -1028,27 +1028,31 @@ class DataAggregator:
         recent_inactive_repos = []
 
         total_commits = 0
+        no_commit_repos = []  # Separate list for repositories with no commits
 
         for repo in repo_metrics:
             days_since_last = repo.get("days_since_last_commit")
-            if days_since_last is None:
-                days_since_last = float('inf')  # Treat None as very old
-            is_active = days_since_last <= activity_threshold_days
 
             # Count total commits
-            total_commits += repo.get("commits", {}).get(primary_window, 0)
+            total_commits += repo.get("commit_counts", {}).get(primary_window, 0)
 
-            if is_active:
-                active_repos.append(repo)
+            # Check if repository has no commits at all
+            has_any_commits = any(count > 0 for count in repo.get("commit_counts", {}).values())
+
+            if not has_any_commits or days_since_last is None:
+                # Repository with no commits - separate category
+                no_commit_repos.append(repo)
             else:
-                inactive_repos.append(repo)
+                # Repository has commits - categorize by activity
+                is_active = days_since_last <= activity_threshold_days
 
-                # Categorize inactive repositories by age
-                days_to_years = 365.25
-                if days_since_last == float('inf'):
-                    # Repositories with no commits go to very old
-                    very_old_repos.append(repo)
+                if is_active:
+                    active_repos.append(repo)
                 else:
+                    inactive_repos.append(repo)
+
+                    # Categorize inactive repositories by age
+                    days_to_years = 365.25
                     age_years = days_since_last / days_to_years
                     if age_years > very_old_years:
                         very_old_repos.append(repo)
@@ -1109,6 +1113,7 @@ class DataAggregator:
                 "total_repositories": len(repo_metrics),
                 "active_repositories": len(active_repos),
                 "inactive_repositories": len(inactive_repos),
+                "no_commit_repositories": len(no_commit_repos),
                 "total_commits": total_commits,
                 "total_authors": len(authors),
                 "total_organizations": len(organizations),
@@ -1120,12 +1125,13 @@ class DataAggregator:
             },
             "top_active_repositories": top_active,
             "least_active_repositories": least_active,
+            "no_commit_repositories": no_commit_repos,
             "top_contributors_commits": top_contributors_commits,
             "top_contributors_loc": top_contributors_loc,
             "top_organizations": top_organizations,
         }
 
-        self.logger.info(f"Aggregation complete: {len(active_repos)} active, {len(inactive_repos)} inactive repositories")
+        self.logger.info(f"Aggregation complete: {len(active_repos)} active, {len(inactive_repos)} inactive, {len(no_commit_repos)} no-commit repositories")
         self.logger.info(f"Found {len(authors)} authors across {len(organizations)} organizations")
 
         return summaries
@@ -1455,6 +1461,7 @@ class ReportRenderer:
         total_repos = counts.get("total_repositories", 0)
         active_repos = counts.get("active_repositories", 0)
         inactive_repos = counts.get("inactive_repositories", 0)
+        no_commit_repos = counts.get("no_commit_repositories", 0)
         total_commits = counts.get("total_commits", 0)
         total_authors = counts.get("total_authors", 0)
         total_orgs = counts.get("total_organizations", 0)
@@ -1462,17 +1469,19 @@ class ReportRenderer:
         # Calculate percentages
         active_pct = (active_repos / total_repos * 100) if total_repos > 0 else 0
         inactive_pct = (inactive_repos / total_repos * 100) if total_repos > 0 else 0
+        no_commit_pct = (no_commit_repos / total_repos * 100) if total_repos > 0 else 0
 
         return f"""## 📈 Global Summary
 
 | Metric | Count | Percentage |
 |--------|-------|------------|
-| **Total Repositories** | {self._format_number(total_repos)} | 100% |
-| **Active Repositories** | {self._format_number(active_repos)} | {active_pct:.1f}% |
-| **Inactive Repositories** | {self._format_number(inactive_repos)} | {inactive_pct:.1f}% |
-| **Total Contributors** | {self._format_number(total_authors)} | - |
-| **Organizations** | {self._format_number(total_orgs)} | - |
-| **Total Commits** | {self._format_number(total_commits)} | - |"""
+| Total Repositories | {self._format_number(total_repos)} | 100% |
+| Active Repositories | {self._format_number(active_repos)} | {active_pct:.1f}% |
+| Inactive Repositories | {self._format_number(inactive_repos)} | {inactive_pct:.1f}% |
+| No Commits | {self._format_number(no_commit_repos)} | {no_commit_pct:.1f}% |
+| Total Contributors | {self._format_number(total_authors)} | - |
+| Organizations | {self._format_number(total_orgs)} | - |
+| Total Commits | {self._format_number(total_commits)} | - |"""
 
     def _generate_activity_distribution_section(self, data: dict[str, Any]) -> str:
         """Generate activity distribution section."""
