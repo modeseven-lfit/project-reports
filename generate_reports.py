@@ -728,8 +728,7 @@ class GitDataCollector:
                 "gerrit_host": gerrit_host,
                 "gerrit_url": gerrit_url,
                 "local_path": str(repo_path),  # Secondary, for internal use
-                "name": gerrit_project,  # Backward compatibility - maps to gerrit_project
-                "path": gerrit_url,      # Backward compatibility - maps to gerrit_url
+
                 "last_commit_timestamp": None,
                 "days_since_last_commit": None,
                 "is_active": False,
@@ -1751,9 +1750,9 @@ class DataAggregator:
                 "total_organizations": len(organizations),
             },
             "activity_distribution": {
-                "very_old": [{"name": r.get("name", ""), "days_since_last_commit": r.get("days_since_last_commit") if r.get("days_since_last_commit") is not None else 999999} for r in very_old_repos],
-                "old": [{"name": r.get("name", ""), "days_since_last_commit": r.get("days_since_last_commit") if r.get("days_since_last_commit") is not None else 999999} for r in old_repos],
-                "recent_inactive": [{"name": r.get("name", ""), "days_since_last_commit": r.get("days_since_last_commit") if r.get("days_since_last_commit") is not None else 999999} for r in recent_inactive_repos],
+                "very_old": [{"name": r.get("gerrit_project", "Unknown"), "days_since_last_commit": r.get("days_since_last_commit") if r.get("days_since_last_commit") is not None else 999999} for r in very_old_repos],
+                "old": [{"name": r.get("gerrit_project", "Unknown"), "days_since_last_commit": r.get("days_since_last_commit") if r.get("days_since_last_commit") is not None else 999999} for r in old_repos],
+                "recent_inactive": [{"name": r.get("gerrit_project", "Unknown"), "days_since_last_commit": r.get("days_since_last_commit") if r.get("days_since_last_commit") is not None else 999999} for r in recent_inactive_repos],
             },
             "top_active_repositories": top_active,
             "least_active_repositories": least_active,
@@ -1779,7 +1778,7 @@ class DataAggregator:
         sample_no_commit_repos: list[dict[str, Any]] = []
 
         for repo in repo_metrics:
-            repo_name = repo.get("gerrit_project", repo.get("name", "Unknown"))
+            repo_name = repo.get("gerrit_project", "Unknown")
             commit_counts = repo.get("commit_counts", {})
 
             # Check if repository has any commits across all time windows
@@ -1828,7 +1827,7 @@ class DataAggregator:
 
         # Aggregate across all repositories
         for repo in repo_metrics:
-            repo_name = repo.get("gerrit_project", repo.get("name", "unknown"))
+            repo_name = repo.get("gerrit_project", "unknown")
 
             # Process each author in this repository
             for author in repo.get("authors", []):
@@ -2222,7 +2221,7 @@ class ReportRenderer:
         from datetime import datetime, timedelta
 
         for repo in sorted_repos:  # Show all repositories, not just top 20
-            name = repo.get("gerrit_project", repo.get("name", "Unknown"))
+            name = repo.get("gerrit_project", "Unknown")
             days = repo.get("days_since_last_commit")
             if days is None:
                 days = 999999  # Very large number for repos with no commits
@@ -2253,7 +2252,7 @@ class ReportRenderer:
                  "|------------|--------------|--------------|--------------|------------------|--------|"]
 
         for repo in top_repos:
-            name = repo.get("gerrit_project", repo.get("name", "Unknown"))
+            name = repo.get("gerrit_project", "Unknown")
             commits_1y = repo.get("commit_counts", {}).get("last_365_days", 0)
             loc_1y = repo.get("loc_stats", {}).get("last_365_days", {}).get("net", 0)
             contributors_1y = repo.get("unique_contributors", {}).get("last_365_days", 0)
@@ -2289,7 +2288,7 @@ class ReportRenderer:
                  "|------------|---------------|-------------------|------------------|--------------|"]
 
         for repo in least_active:
-            name = repo.get("gerrit_project", repo.get("name", "Unknown"))
+            name = repo.get("gerrit_project", "Unknown")
             days_since = repo.get("days_since_last_commit")
             if days_since is None:
                 days_since = 999999  # Very large number for repos with no commits
@@ -2329,7 +2328,7 @@ class ReportRenderer:
                  "|------------|"]
 
         for repo in no_commit_repos:
-            name = repo.get("gerrit_project", repo.get("name", "Unknown"))
+            name = repo.get("gerrit_project", "Unknown")
             lines.append(f"| {name} |")
 
         lines.extend(["", f"**Total:** {len(no_commit_repos)} repositories with no commits"])
@@ -2353,7 +2352,7 @@ class ReportRenderer:
 
             if workflow_names or jenkins_job_names:
                 repos_with_cicd.append({
-                    "name": repo.get("gerrit_project", repo.get("name", "Unknown")),
+                    "name": repo.get("gerrit_project", "Unknown"),
                     "workflow_names": workflow_names,
                     "jenkins_job_names": jenkins_job_names
                 })
@@ -2492,7 +2491,7 @@ class ReportRenderer:
                  "|------------|------|------------|------------|-------------|-----------|--------|"]
 
         for repo in sorted_repos:
-            name = repo.get("gerrit_project", repo.get("name", "Unknown"))
+            name = repo.get("gerrit_project", "Unknown")
             features = repo.get("features", {})
             is_active = repo.get("is_active", False)
 
@@ -2712,13 +2711,16 @@ class ReportRenderer:
 
                     # Check if this is the feature matrix table by looking for specific headers
                     is_feature_matrix = False
+                    is_cicd_jobs = False
                     if has_headers and i < len(lines):
                         table_header = line.lower()
                         if 'repository' in table_header and 'dependabot' in table_header and 'workflows' in table_header:
                             is_feature_matrix = True
+                        elif 'repository' in table_header and ('github workflows' in table_header or 'jenkins jobs' in table_header):
+                            is_cicd_jobs = True
 
                     table_class = ' class="sortable"' if (has_headers and sortable_enabled) else ''
-                    if is_feature_matrix:
+                    if is_feature_matrix or is_cicd_jobs:
                         table_class = ' class="sortable no-pagination"'
 
                     html_lines.append(f'<table{table_class}>')
