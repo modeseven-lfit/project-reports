@@ -3261,6 +3261,10 @@ Examples:
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         help="Override log level from configuration"
     )
+    parser.add_argument(
+        "--jenkins-host",
+        help="Jenkins server hostname for API integration (overrides config file)"
+    )
 
     return parser.parse_args()
 
@@ -3282,6 +3286,14 @@ def main() -> int:
             config.setdefault("logging", {})["level"] = args.log_level
         elif args.verbose:
             config.setdefault("logging", {})["level"] = "DEBUG"
+
+        # Override Jenkins configuration if jenkins-host is provided
+        if args.jenkins_host:
+            config.setdefault("jenkins", {})
+            config["jenkins"]["enabled"] = True
+            config["jenkins"]["host"] = args.jenkins_host
+            config["jenkins"].setdefault("timeout", 30.0)
+            print(f"🔧 Jenkins integration overridden: {args.jenkins_host}")
 
         # Setup logging
         log_config = config.get("logging", {})
