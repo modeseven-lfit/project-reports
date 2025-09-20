@@ -412,9 +412,13 @@ class JenkinsAPIClient:
         self.host = host
         self.timeout = timeout
         self.base_url = f"https://{host}"
+        self.api_base_path = None  # Will be discovered
 
         import httpx
         self.client = httpx.Client(timeout=timeout)
+
+        # Discover the correct API base path
+        self._discover_api_base_path()
 
     def __enter__(self):
         return self
@@ -427,47 +431,112 @@ class JenkinsAPIClient:
         if hasattr(self, 'client'):
             self.client.close()
 
+    def _discover_api_base_path(self):
+        """Discover the correct API base path for this Jenkins server."""
+        # Common Jenkins API path patterns to try
+        api_patterns = [
+            "/api/json",
+            "/releng/api/json",
+            "/jenkins/api/json",
+            "/ci/api/json",
+            "/build/api/json"
+        ]
+
+        logging.info(f"Discovering Jenkins API base path for {self.host}")
+
+        for pattern in api_patterns:
+            try:
+                test_url = f"{self.base_url}{pattern}?tree=jobs[name]"
+                logging.debug(f"Testing Jenkins API path: {test_url}")
+
+                response = self.client.get(test_url)
+                if response.status_code == 200:
+                    try:
+                        data = response.json()
+                        if "jobs" in data and isinstance(data["jobs"], list):
+                            self.api_base_path = pattern
+                            job_count = len(data["jobs"])
+                            logging.info(f"Found working Jenkins API path: {pattern} ({job_count} jobs)")
+                            return
+                    except Exception as e:
+                        logging.debug(f"Invalid JSON response from {pattern}: {e}")
+                        continue
+                else:
+                    logging.debug(f"HTTP {response.status_code} for {pattern}")
+
+            except Exception as e:
+                logging.debug(f"Connection error testing {pattern}: {e}")
+                continue
+
+        # If no pattern worked, default to standard path
+        self.api_base_path = "/api/json"
+        logging.warning(f"Could not discover Jenkins API path for {self.host}, using default: {self.api_base_path}")
+
+
+
     def get_all_jobs(self) -> dict[str, Any]:
         """Get all jobs from Jenkins."""
+        if not self.api_base_path:
+            logging.error(f"No valid API base path discovered for {self.host}")
+            return {}
+
         try:
-            url = f"{self.base_url}/api/json?tree=jobs[name,url,color]"
+            url = f"{self.base_url}{self.api_base_path}?tree=jobs[name,url,color]"
+            logging.info(f"Fetching Jenkins jobs from: {url}")
             response = self.client.get(url)
 
+            logging.info(f"Jenkins API response: {response.status_code}")
             if response.status_code == 200:
-                return response.json()
+                data = response.json()
+                job_count = len(data.get("jobs", []))
+                logging.info(f"Found {job_count} Jenkins jobs")
+                return data
             else:
-                logging.warning(f"Jenkins API returned {response.status_code}")
+                logging.warning(f"Jenkins API returned {response.status_code} for {url}")
+                logging.warning(f"Response text: {response.text[:500]}")
                 return {}
 
         except Exception as e:
-            logging.error(f"Exception fetching Jenkins jobs: {e}")
+            logging.error(f"Exception fetching Jenkins jobs from {self.host}: {e}")
             return {}
 
     def get_jobs_for_project(self, project_name: str) -> list[dict[str, Any]]:
         """Get jobs related to a specific Gerrit project."""
+        logging.debug(f"Looking for Jenkins jobs for project: {project_name}")
         all_jobs = self.get_all_jobs()
         project_jobs: list[dict[str, Any]] = []
 
         if "jobs" not in all_jobs:
+            logging.debug(f"No 'jobs' key found in Jenkins API response for {project_name}")
             return project_jobs
 
         # Convert project name to job name format (replace / with -)
         project_job_name = project_name.replace("/", "-")
+        logging.debug(f"Searching for Jenkins jobs matching pattern: {project_job_name}")
+
+        total_jobs = len(all_jobs["jobs"])
+        logging.debug(f"Checking {total_jobs} total Jenkins jobs for matches")
 
         for job in all_jobs["jobs"]:
             job_name = job.get("name", "")
             if project_job_name in job_name:
+                logging.debug(f"Found matching Jenkins job: {job_name}")
                 # Get detailed job info
                 job_details = self.get_job_details(job_name)
                 if job_details:
                     project_jobs.append(job_details)
+                else:
+                    logging.warning(f"Failed to get details for Jenkins job: {job_name}")
 
+        logging.info(f"Found {len(project_jobs)} Jenkins jobs for project {project_name}")
         return project_jobs
 
     def get_job_details(self, job_name: str) -> dict[str, Any]:
         """Get detailed information about a specific job."""
         try:
-            url = f"{self.base_url}/job/{job_name}/api/json"
+            # Extract base path without /api/json suffix for job URLs
+            base_path = self.api_base_path.replace('/api/json', '') if self.api_base_path else ''
+            url = f"{self.base_url}{base_path}/job/{job_name}/api/json"
             response = self.client.get(url)
 
             if response.status_code == 200:
@@ -495,7 +564,9 @@ class JenkinsAPIClient:
     def get_last_build_info(self, job_name: str) -> dict[str, Any]:
         """Get information about the last build of a job."""
         try:
-            url = f"{self.base_url}/job/{job_name}/lastBuild/api/json?tree=result,duration,timestamp,building,number"
+            # Extract base path without /api/json suffix for job URLs
+            base_path = self.api_base_path.replace('/api/json', '') if self.api_base_path else ''
+            url = f"{self.base_url}{base_path}/job/{job_name}/lastBuild/api/json?tree=result,duration,timestamp,building,number"
             response = self.client.get(url)
 
             if response.status_code == 200:
@@ -576,8 +647,13 @@ class GitDataCollector:
             try:
                 self.jenkins_client = JenkinsAPIClient(jenkins_host, timeout)
                 self.logger.info(f"Initialized Jenkins API client for {jenkins_host} (from environment)")
+                # Test the connection
+                test_jobs = self.jenkins_client.get_all_jobs()
+                job_count = len(test_jobs.get("jobs", []))
+                self.logger.info(f"Jenkins connection test: found {job_count} total jobs on {jenkins_host}")
             except Exception as e:
                 self.logger.error(f"Failed to initialize Jenkins API client for {jenkins_host}: {e}")
+                self.jenkins_client = None
         elif jenkins_config.get("enabled", False):
             # Fallback to config file (for backward compatibility)
             host = jenkins_config.get("host")
@@ -830,12 +906,18 @@ class GitDataCollector:
     def _get_jenkins_jobs_for_repo(self, repo_name: str) -> list[dict[str, Any]]:
         """Get Jenkins jobs for a specific repository."""
         if not self.jenkins_client:
+            self.logger.debug(f"No Jenkins client available for {repo_name}")
             return []
 
         try:
-            return self.jenkins_client.get_jobs_for_project(repo_name)
+            jobs = self.jenkins_client.get_jobs_for_project(repo_name)
+            if jobs:
+                self.logger.debug(f"Found {len(jobs)} Jenkins jobs for {repo_name}: {[job.get('name') for job in jobs]}")
+            else:
+                self.logger.debug(f"No Jenkins jobs found for {repo_name}")
+            return jobs
         except Exception as e:
-            self.logger.debug(f"Error fetching Jenkins jobs for {repo_name}: {e}")
+            self.logger.warning(f"Error fetching Jenkins jobs for {repo_name}: {e}")
             return []
 
     def bucket_commit_into_windows(self, commit_datetime: datetime.datetime, time_windows: dict[str, dict[str, Any]]) -> List[str]:
