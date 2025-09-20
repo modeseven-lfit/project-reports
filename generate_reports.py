@@ -29,6 +29,7 @@ import datetime
 import hashlib
 import json
 import logging
+import os
 import subprocess
 import sys
 import tempfile
@@ -547,6 +548,9 @@ class GitDataCollector:
         # Initialize Jenkins API client if configured
         self.jenkins_client = None
         self.jenkins_jobs_cache: dict[str, list[dict[str, Any]]] = {}  # Cache for Jenkins job data
+
+        # Check for Jenkins host from environment variable
+        jenkins_host = os.environ.get("JENKINS_HOST")
         jenkins_config = self.config.get("jenkins", {})
 
         if gerrit_config.get("enabled", False):
@@ -566,14 +570,23 @@ class GitDataCollector:
                 self.logger.error("Gerrit enabled but no host configured")
 
         # Initialize Jenkins client
-        if jenkins_config.get("enabled", False):
+        if jenkins_host:
+            # Environment variable takes precedence - enables Jenkins integration
+            timeout = jenkins_config.get("timeout", 30.0)
+            try:
+                self.jenkins_client = JenkinsAPIClient(jenkins_host, timeout)
+                self.logger.info(f"Initialized Jenkins API client for {jenkins_host} (from environment)")
+            except Exception as e:
+                self.logger.error(f"Failed to initialize Jenkins API client for {jenkins_host}: {e}")
+        elif jenkins_config.get("enabled", False):
+            # Fallback to config file (for backward compatibility)
             host = jenkins_config.get("host")
             timeout = jenkins_config.get("timeout", 30.0)
 
             if host:
                 try:
                     self.jenkins_client = JenkinsAPIClient(host, timeout)
-                    self.logger.info(f"Initialized Jenkins API client for {host}")
+                    self.logger.info(f"Initialized Jenkins API client for {host} (from config)")
                 except Exception as e:
                     self.logger.error(f"Failed to initialize Jenkins API client for {host}: {e}")
             else:
@@ -3261,10 +3274,7 @@ Examples:
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         help="Override log level from configuration"
     )
-    parser.add_argument(
-        "--jenkins-host",
-        help="Jenkins server hostname for API integration (overrides config file)"
-    )
+
 
     return parser.parse_args()
 
@@ -3287,13 +3297,7 @@ def main() -> int:
         elif args.verbose:
             config.setdefault("logging", {})["level"] = "DEBUG"
 
-        # Override Jenkins configuration if jenkins-host is provided
-        if args.jenkins_host:
-            config.setdefault("jenkins", {})
-            config["jenkins"]["enabled"] = True
-            config["jenkins"]["host"] = args.jenkins_host
-            config["jenkins"].setdefault("timeout", 30.0)
-            print(f"🔧 Jenkins integration overridden: {args.jenkins_host}")
+
 
         # Setup logging
         log_config = config.get("logging", {})

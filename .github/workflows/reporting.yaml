@@ -141,26 +141,26 @@ jobs:
 
       - name: "Run comprehensive analytics for ${{ matrix.project }}"
         shell: bash
+        env:
+          JENKINS_HOST: ${{ matrix.jenkins }}
         run: |
           project="${{ matrix.project }}"
           echo "📊 Starting comprehensive analytics for $project"
 
-          # Build command with optional Jenkins host
-          cmd="python3 generate_reports.py \
-            --project \"$project\" \
-            --repos-path \"./${{ matrix.gerrit }}\" \
-            --config-dir \"./configuration\" \
-            --output-dir \"./reports\" \
-            --verbose"
-
-          # Add Jenkins host if provided in matrix
-          if [ -n "${{ matrix.jenkins }}" ]; then
-            cmd="$cmd --jenkins-host \"${{ matrix.jenkins }}\""
-            echo "🔧 Jenkins integration enabled for: ${{ matrix.jenkins }}"
+          # Debug: Show Jenkins host if provided
+          if [ -n "$JENKINS_HOST" ]; then
+            echo "🔧 Jenkins integration enabled for: $JENKINS_HOST"
+          else
+            echo "ℹ️ No Jenkins host provided - Jenkins integration disabled"
           fi
 
           # Execute the comprehensive reporting system
-          eval "$cmd"
+          python3 generate_reports.py \
+            --project "$project" \
+            --repos-path "./${{ matrix.gerrit }}" \
+            --config-dir "./configuration" \
+            --output-dir "./reports" \
+            --verbose
 
           echo "✅ Analytics completed successfully for $project"
 
