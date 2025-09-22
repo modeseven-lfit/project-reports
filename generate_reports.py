@@ -607,6 +607,7 @@ class GitDataCollector:
         self.logger = logger
         self.cache_enabled = config.get("performance", {}).get("cache", False)
         self.cache_dir = None
+        self.repos_path: Optional[Path] = None  # Will be set later for relative path calculation
         if self.cache_enabled:
             self.cache_dir = Path(tempfile.gettempdir()) / "repo_reporting_cache"
             self.cache_dir.mkdir(exist_ok=True)
@@ -718,7 +719,21 @@ class GitDataCollector:
                         return gerrit_project
                     break
 
-            # Strategy 3: Check if any parent directories suggest hierarchical structure
+            # Strategy 3: Look for organization root directories and extract relative path
+            # Common organization names in paths
+            org_names = ['onap', 'o-ran-sc', 'opendaylight', 'fdio', 'opnfv', 'agl']
+
+            for i, part in enumerate(path_parts):
+                if part.lower() in org_names:
+                    # Found organization root, extract everything after it
+                    if i < len(path_parts) - 1:
+                        project_path_parts = path_parts[i + 1:]
+                        gerrit_project = '/'.join(project_path_parts)
+                        self.logger.debug(f"Extracted Gerrit project from organization root '{part}': {gerrit_project}")
+                        return gerrit_project
+                    break
+
+            # Strategy 4: Check if any parent directories suggest hierarchical structure
             # Look for common Gerrit project patterns (2+ levels deep)
             # Filter out root directory from path_parts
             meaningful_parts = [part for part in path_parts if part and part != '/']
@@ -727,10 +742,7 @@ class GitDataCollector:
                 for depth in range(4, 1, -1):  # Try 4, 3, 2 components
                     if len(meaningful_parts) >= depth:
                         potential_project = '/'.join(meaningful_parts[-depth:])
-                        # Validate it looks like a hierarchical project (has slashes, reasonable length)
-                        if '/' in potential_project and len(potential_project.split('/')) >= 2:
-                            self.logger.debug(f"Extracted Gerrit project from path depth {depth}: {potential_project}")
-                            return potential_project
+                        # Validate it looks_project
 
             # Fallback: use just the repository folder name
             self.logger.debug(f"No hierarchical structure detected, using folder name: {repo_path.name}")
@@ -804,7 +816,10 @@ class GitDataCollector:
         Returns structured metrics or error descriptor.
         """
         # Extract Gerrit project information
-        gerrit_project = self._extract_gerrit_project(repo_path)
+        if self.repos_path:
+            gerrit_project = str(repo_path.relative_to(self.repos_path))
+        else:
+            gerrit_project = self._extract_gerrit_project(repo_path)
         gerrit_host = self._extract_gerrit_host(repo_path)
         gerrit_url = self._derive_gerrit_url(repo_path)
 
@@ -1796,7 +1811,7 @@ class DataAggregator:
         # Build top active repositories (sorted by commits in primary window)
         top_active = self.rank_entities(
             active_repos,
-            f"commits.{primary_window}",
+            f"commit_counts.{primary_window}",
             reverse=True,
             limit=top_n
         )
@@ -1845,9 +1860,9 @@ class DataAggregator:
                 "total_organizations": len(organizations),
             },
             "activity_distribution": {
-                "very_old": [{"name": r.get("gerrit_project", "Unknown"), "days_since_last_commit": r.get("days_since_last_commit") if r.get("days_since_last_commit") is not None else 999999} for r in very_old_repos],
-                "old": [{"name": r.get("gerrit_project", "Unknown"), "days_since_last_commit": r.get("days_since_last_commit") if r.get("days_since_last_commit") is not None else 999999} for r in old_repos],
-                "recent_inactive": [{"name": r.get("gerrit_project", "Unknown"), "days_since_last_commit": r.get("days_since_last_commit") if r.get("days_since_last_commit") is not None else 999999} for r in recent_inactive_repos],
+                "very_old": [{"gerrit_project": r.get("gerrit_project", "Unknown"), "days_since_last_commit": r.get("days_since_last_commit") if r.get("days_since_last_commit") is not None else 999999} for r in very_old_repos],
+                "old": [{"gerrit_project": r.get("gerrit_project", "Unknown"), "days_since_last_commit": r.get("days_since_last_commit") if r.get("days_since_last_commit") is not None else 999999} for r in old_repos],
+                "recent_inactive": [{"gerrit_project": r.get("gerrit_project", "Unknown"), "days_since_last_commit": r.get("days_since_last_commit") if r.get("days_since_last_commit") is not None else 999999} for r in recent_inactive_repos],
             },
             "top_active_repositories": top_active,
             "least_active_repositories": least_active,
@@ -1885,7 +1900,7 @@ class DataAggregator:
                 repos_no_commits += 1
                 if len(sample_no_commit_repos) < 3:  # Collect sample for detailed analysis
                     sample_no_commit_repos.append({
-                        "name": repo_name,
+                        "gerrit_project": repo_name,
                         "commit_counts": commit_counts
                     })
 
@@ -1896,7 +1911,7 @@ class DataAggregator:
         if sample_no_commit_repos:
             self.logger.info("Sample repositories with NO commits:")
             for repo in sample_no_commit_repos:
-                self.logger.info(f"  - {repo['name']}")
+                self.logger.info(f"  - {repo['gerrit_project']}")
 
     def compute_author_rollups(self, repo_metrics: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """
@@ -2062,13 +2077,17 @@ class DataAggregator:
 
         def get_name(entity):
             """Extract name for tie-breaking."""
-            return entity.get("name") or entity.get("domain") or entity.get("email") or ""
+            return entity.get("name") or entity.get("gerrit_project") or entity.get("domain") or entity.get("email") or ""
+
+
 
         # Sort with primary metric (reverse if specified) and secondary name (always ascending)
         if reverse:
             sorted_entities = sorted(entities, key=lambda x: (-get_sort_value(x), get_name(x)))
         else:
             sorted_entities = sorted(entities, key=lambda x: (get_sort_value(x), get_name(x)))
+
+
 
         if limit and limit > 0:
             return sorted_entities[:limit]
@@ -2447,7 +2466,7 @@ class ReportRenderer:
 
             if workflow_names or jenkins_job_names:
                 repos_with_cicd.append({
-                    "name": repo.get("gerrit_project", "Unknown"),
+                    "gerrit_project": repo.get("gerrit_project", "Unknown"),
                     "workflow_names": workflow_names,
                     "jenkins_job_names": jenkins_job_names
                 })
@@ -2469,8 +2488,8 @@ class ReportRenderer:
                      "| Repository | GitHub Workflows |",
                      "|------------|-------------------|"]
 
-        for repo in sorted(repos_with_cicd, key=lambda x: x["name"]):
-            name = repo["name"]
+        for repo in sorted(repos_with_cicd, key=lambda x: x["gerrit_project"]):
+            name = repo["gerrit_project"]
             workflow_names_str = "<br>".join(sorted(repo["workflow_names"])) if repo["workflow_names"] else ""
 
             if has_any_jenkins:
@@ -3112,6 +3131,9 @@ class RepositoryReporter:
 
         self.git_collector.time_windows = cast(dict[str, dict[str, Any]], report_data["time_windows"])
 
+        # Update git collector with repos_path for relative path calculation
+        self.git_collector.repos_path = repos_path
+
         # Find all repository directories
         repo_dirs = self._discover_repositories(repos_path)
         self.logger.info(f"Found {len(repo_dirs)} repositories to analyze")
@@ -3203,8 +3225,8 @@ class RepositoryReporter:
                     # Check if it's a git repository
                     git_dir = item / ".git"
                     if git_dir.exists():
-                        # Derive Gerrit project name from path
-                        gerrit_project_name = self.git_collector._extract_gerrit_project(item)
+                        # Use relative path from repos_path as Gerrit project name
+                        gerrit_project_name = str(item.relative_to(repos_path))
                         self.logger.debug(f"Found git repository: {gerrit_project_name} at {item.relative_to(repos_path)}")
 
                         # Validate against Gerrit API if available
