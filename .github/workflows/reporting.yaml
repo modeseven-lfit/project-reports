@@ -126,6 +126,9 @@ jobs:
           threads: "4"
           clone-timeout: "300"
           use-https: "true"
+          # Enable move-conflicting to ensure 100% repository availability
+          # for comprehensive data mining and reporting purposes
+          move-conflicting: "true"
 
       - name: "Set up Python environment for ${{ matrix.project }}"
         # yamllint disable-line rule:line-length
