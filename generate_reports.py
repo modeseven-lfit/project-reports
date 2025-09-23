@@ -1156,10 +1156,12 @@ class GitDataCollector:
                 "name": author_data["name"],
                 "email": author_data["email"],
                 "username": author_data["username"],
+                "domain": author_data["domain"],
                 "commits": author_data["commit_counts"],
                 "lines_added": {window: author_data["loc_stats"][window]["added"] for window in self.time_windows},
                 "lines_removed": {window: author_data["loc_stats"][window]["removed"] for window in self.time_windows},
                 "lines_net": {window: author_data["loc_stats"][window]["net"] for window in self.time_windows},
+                "repositories": author_data["repositories"],
             }
             repo_authors.append(author_record)
 
@@ -1950,7 +1952,7 @@ class DataAggregator:
                     author_aggregates[email]["name"] = author.get("name", "")
                     author_aggregates[email]["email"] = email
                     author_aggregates[email]["username"] = author.get("username", "")
-                    author_aggregates[email]["domain"] = email.split("@")[-1] if "@" in email else ""
+                    author_aggregates[email]["domain"] = author.get("domain", "")
 
                 # Aggregate metrics for each time window
                 for window_name in author.get("commits", {}):
@@ -3110,7 +3112,9 @@ class RepositoryReporter:
 
         TODO: Coordinate all phases
         """
-        self.logger.info(f"Starting repository analysis in {repos_path}")
+        # Resolve to absolute path for consistent handling
+        repos_path_abs = repos_path.resolve()
+        self.logger.info(f"Starting repository analysis in {repos_path_abs}")
 
         # Initialize data structure
         report_data = {
@@ -3132,10 +3136,10 @@ class RepositoryReporter:
         self.git_collector.time_windows = cast(dict[str, dict[str, Any]], report_data["time_windows"])
 
         # Update git collector with repos_path for relative path calculation
-        self.git_collector.repos_path = repos_path
+        self.git_collector.repos_path = repos_path_abs
 
         # Find all repository directories
-        repo_dirs = self._discover_repositories(repos_path)
+        repo_dirs = self._discover_repositories(repos_path_abs)
         self.logger.info(f"Found {len(repo_dirs)} repositories to analyze")
 
         # Analyze repositories (with concurrency)
@@ -3207,52 +3211,52 @@ class RepositoryReporter:
         return generated_files
 
     def _discover_repositories(self, repos_path: Path) -> list[Path]:
-        """Find all repository directories, including nested ones."""
+        """Find all repository directories recursively with no artificial depth limit."""
         if not repos_path.exists():
             raise FileNotFoundError(f"Repository path does not exist: {repos_path}")
 
-        self.logger.debug(f"Discovering repositories in: {repos_path}")
+        self.logger.info(f"Discovering repositories recursively under: {repos_path}")
 
-        repo_dirs = []
+        repo_dirs: list[Path] = []
+        access_errors = 0
 
-        def find_git_repos_recursive(path: Path, max_depth: int = 3, current_depth: int = 0) -> None:
-            """Recursively find git repositories up to max_depth."""
-            if current_depth > max_depth:
-                return
-
-            for item in path.iterdir():
-                if item.is_dir() and not item.name.startswith('.'):
-                    # Check if it's a git repository
-                    git_dir = item / ".git"
+        # Use rglob to discover all .git directories without a depth limit
+        try:
+            for git_dir in repos_path.rglob(".git"):
+                try:
                     if git_dir.exists():
-                        # Use relative path from repos_path as Gerrit project name
-                        gerrit_project_name = str(item.relative_to(repos_path))
-                        self.logger.debug(f"Found git repository: {gerrit_project_name} at {item.relative_to(repos_path)}")
+                        repo_dir = git_dir.parent
 
-                        # Validate against Gerrit API if available
-                        if hasattr(self.git_collector, 'gerrit_projects_cache') and self.git_collector.gerrit_projects_cache:
-                            if gerrit_project_name in self.git_collector.gerrit_projects_cache:
-                                self.logger.debug(f"Verified {gerrit_project_name} exists in Gerrit")
-                            else:
-                                self.logger.warning(f"Repository {gerrit_project_name} not found in Gerrit API cache")
-
-                        repo_dirs.append(item)
-                    else:
-                        # Recursively search subdirectories
-                        self.logger.debug(f"Searching subdirectory: {item.relative_to(repos_path)}")
+                        # Use relative path from repos_path for clean logging (fallback to absolute)
                         try:
-                            find_git_repos_recursive(item, max_depth, current_depth + 1)
-                        except (PermissionError, OSError) as e:
-                            self.logger.debug(f"Cannot access {item}: {e}")
-                else:
-                    self.logger.debug(f"Skipping {item.name}")
+                            rel_path = str(repo_dir.relative_to(repos_path))
+                        except ValueError:
+                            rel_path = str(repo_dir)
 
-        # Start recursive search
-        find_git_repos_recursive(repos_path)
+                        self.logger.debug(f"Found git repository: {rel_path}")
 
-        self.logger.info(f"Discovered {len(repo_dirs)} git repositories")
+                        # Validate against Gerrit API cache if available
+                        if getattr(self.git_collector, "gerrit_projects_cache", None):
+                            if rel_path in self.git_collector.gerrit_projects_cache:
+                                self.logger.debug(f"Verified {rel_path} exists in Gerrit")
+                            else:
+                                self.logger.warning(f"Repository {rel_path} not found in Gerrit API cache")
 
-        return sorted(repo_dirs)
+                        repo_dirs.append(repo_dir)
+                except (PermissionError, OSError) as e:
+                    access_errors += 1
+                    self.logger.debug(f"Cannot access potential repository at {git_dir}: {e}")
+        except (PermissionError, OSError) as e:
+            self.logger.warning(f"Error during repository discovery: {e}")
+
+        # Deduplicate and sort results
+        unique_repos = sorted({p.resolve() for p in repo_dirs})
+
+        self.logger.info(f"Discovered {len(unique_repos)} git repositories")
+        if access_errors:
+            self.logger.debug(f"Encountered {access_errors} access errors during discovery")
+
+        return unique_repos
 
     def _analyze_repositories_parallel(self, repo_dirs: list[Path]) -> list[dict[str, Any]]:
         """Analyze repositories with optional concurrency."""

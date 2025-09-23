@@ -20,7 +20,7 @@ permissions: {}
 jobs:
   verify:
     name: "Verify Configuration"
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     permissions:
       contents: read
     timeout-minutes: 5
@@ -94,9 +94,9 @@ jobs:
             "$GITHUB_STEP_SUMMARY"
 
   analyze:
-    name: "Analyze ${{ matrix.project }}"
+    name: "${{ matrix.project }}"
     needs: verify
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     permissions:
       contents: read
     timeout-minutes: 60
@@ -215,7 +215,7 @@ jobs:
     name: "Generate Summary Report"
     needs: [verify, analyze]
     if: always()
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     permissions:
       contents: read
     timeout-minutes: 10
