@@ -836,6 +836,8 @@ class GitDataCollector:
                 "last_commit_timestamp": None,
                 "days_since_last_commit": None,
                 "is_active": False,
+                "has_any_commits": False,  # Track if repo has ANY commits (regardless of time windows)
+                "total_commits_ever": 0,   # Total commits across all history
                 "commit_counts": {window: 0 for window in self.time_windows},
                 "loc_stats": {window: {"added": 0, "removed": 0, "net": 0} for window in self.time_windows},
                 "unique_contributors": {window: set() for window in self.time_windows},  # type: ignore
@@ -865,11 +867,9 @@ class GitDataCollector:
                 "git", "log", "--numstat", "--date=iso", "--pretty=format:%H|%ad|%an|%ae|%s"
             ]
 
-            # Limit history if configured
-            max_history_years = self.config.get("data_quality", {}).get("max_history_years", 10)
-            if max_history_years > 0:
-                since_date = datetime.datetime.now() - datetime.timedelta(days=max_history_years * 365)
-                git_command.extend(["--since", since_date.strftime("%Y-%m-%d")])
+            # NOTE: Removed max_history_years filtering to ensure all commit data is captured
+            # for accurate total_commits_ever, has_any_commits, and complete contributor data.
+            # Time window filtering is applied separately during commit processing.
 
             success, output = safe_git_command(git_command, repo_path, self.logger)
             if not success:
@@ -878,6 +878,10 @@ class GitDataCollector:
 
             # Parse git log output
             commits_data = self._parse_git_log_output(output, gerrit_project)
+
+            # Update total commit count regardless of time windows
+            metrics["repository"]["total_commits_ever"] = len(commits_data)
+            metrics["repository"]["has_any_commits"] = len(commits_data) > 0
 
             # Process commits into time windows
             for commit_data in commits_data:
@@ -1114,9 +1118,9 @@ class GitDataCollector:
         """Finalize repository metrics after processing all commits."""
         repo_metrics = metrics["repository"]
 
-        # Find the most recent commit to determine activity status
-        if any(count > 0 for count in repo_metrics["commit_counts"].values()):
-            # Find last commit date by looking at git log with limit 1
+        # Check if repository has any commits at all
+        if repo_metrics.get("has_any_commits", False):
+            # Repository has commits - find last commit date
             git_command = ["git", "log", "-1", "--date=iso", "--pretty=format:%ad"]
             success, output = safe_git_command(git_command, Path(repo_metrics["local_path"]), self.logger)
 
@@ -1133,14 +1137,20 @@ class GitDataCollector:
                     days_since = (now - last_commit_date).days
                     repo_metrics["days_since_last_commit"] = days_since
 
-                    # Determine if repository is active
+                    # Determine if repository is active (based on recent commits in time windows)
                     activity_threshold = self.config.get("activity_threshold_days", 365)
-                    repo_metrics["is_active"] = days_since <= activity_threshold
+                    repo_metrics["is_active"] = any(count > 0 for count in repo_metrics["commit_counts"].values()) and days_since <= activity_threshold
+
+                    # Log appropriate message based on activity
+                    if any(count > 0 for count in repo_metrics["commit_counts"].values()):
+                        self.logger.debug(f"Repository {repo_name} has {repo_metrics['total_commits_ever']} commits ({sum(repo_metrics['commit_counts'].values())} recent)")
+                    else:
+                        self.logger.debug(f"Repository {repo_name} has {repo_metrics['total_commits_ever']} commits (all historical, none recent)")
 
                 except ValueError as e:
                     self.logger.warning(f"Could not parse last commit date for {repo_name}: {e}")
         else:
-            # No commits found - repository has no commit history
+            # Truly no commits - empty repository
             self.logger.info(f"Repository {repo_name} has no commits")
 
         # Convert author repository sets to counts for JSON serialization
@@ -1776,32 +1786,38 @@ class DataAggregator:
             total_commits += repo.get("commit_counts", {}).get(primary_window, 0)
             total_lines_added += repo.get("loc_stats", {}).get(primary_window, {}).get("added", 0)
 
-            # Check if repository has no commits at all
-            has_any_commits = any(count > 0 for count in repo.get("commit_counts", {}).values())
+            # Check if repository has no commits at all (use the explicit flag)
+            has_any_commits = repo.get("has_any_commits", False)
 
-            if not has_any_commits or days_since_last is None:
+            if not has_any_commits:
                 # Repository with no commits - separate category
                 no_commit_repos.append(repo)
             else:
                 # Repository has commits - categorize by activity
-                is_active = days_since_last <= activity_threshold_days
-
-                if is_active:
-                    active_repos.append(repo)
-                else:
+                # Handle case where days_since_last_commit might be None
+                if days_since_last is None:
+                    # If we have commits but no days_since_last, treat as very old
                     inactive_repos.append(repo)
+                    very_old_repos.append(repo)
+                else:
+                    is_active = days_since_last <= activity_threshold_days
 
-                    # Categorize inactive repositories by age
-                    days_to_years = 365.25
-                    age_years = days_since_last / days_to_years
-                    if age_years > very_old_years:
-                        very_old_repos.append(repo)
-                    elif age_years > old_years:
-                        old_repos.append(repo)
+                    if is_active:
+                        active_repos.append(repo)
                     else:
-                        # Recent inactive: inactive but less than old_years threshold
-                        # This should only include repos inactive for less than old_years
-                        recent_inactive_repos.append(repo)
+                        inactive_repos.append(repo)
+
+                        # Categorize inactive repositories by age
+                        days_to_years = 365.25
+                        age_years = days_since_last / days_to_years
+                        if age_years > very_old_years:
+                            very_old_repos.append(repo)
+                        elif age_years > old_years:
+                            old_repos.append(repo)
+                        else:
+                            # Recent inactive: inactive but less than old_years threshold
+                            # This should only include repos inactive for less than old_years
+                            recent_inactive_repos.append(repo)
 
         # Aggregate author and organization data
         self.logger.info("Computing author rollups")
@@ -2230,10 +2246,10 @@ class ReportRenderer:
         else:
             formatted_time = "Unknown"
 
-        return f"""# 📊 Repository Analysis Report: {project}
+        return f"""# 📊 Gerrit Project Analysis Report: {project}
 
 **Generated:** {formatted_time}
-**Repositories Analyzed:** {total_repos:,} ({active_repos:,} active)
+**Gerrit Projects Analyzed:** {total_repos} ({active_repos} active)
 **Contributors Found:** {total_authors:,}
 **Schema Version:** {data.get("schema_version", "1.0.0")}"""
 
@@ -2264,9 +2280,9 @@ class ReportRenderer:
 
 | Metric | Count | Percentage |
 |--------|-------|------------|
-| Total Repositories | {self._format_number(total_repos)} | 100% |
-| Active Repositories | {self._format_number(active_repos)} | {active_pct:.1f}% |
-| Inactive Repositories | {self._format_number(inactive_repos)} | {inactive_pct:.1f}% |
+| Total Gerrit Projects | {self._format_number(total_repos)} | 100% |
+| Active Gerrit Projects | {self._format_number(active_repos)} | {active_pct:.1f}% |
+| Inactive Gerrit Projects | {self._format_number(inactive_repos)} | {inactive_pct:.1f}% |
 | No Commits | {self._format_number(no_commit_repos)} | {no_commit_pct:.1f}% |
 | Total Contributors | {self._format_number(total_authors)} | - |
 | Organizations | {self._format_number(total_orgs)} | - |
@@ -2275,8 +2291,8 @@ class ReportRenderer:
 
 ### Activity Status Definitions
 
-- **✅ Active**: Repository has commits within the last {activity_threshold} days
-- **⚠️ Inactive**: Repository has no commits within the last {activity_threshold} days
+- **✅ Active**: Gerrit project has commits within the last {activity_threshold} days
+- **⚠️ Inactive**: Gerrit project has no commits within the last {activity_threshold} days
 
 ### Age Category Definitions (for inactive repositories)
 
@@ -2434,20 +2450,20 @@ class ReportRenderer:
         no_commit_repos = data.get("summaries", {}).get("no_commit_repositories", [])
 
         if not no_commit_repos:
-            return "## 📝 Repositories with No Commits\n\n*All repositories have commits!*"
+            return "## 📝 Gerrit Projects with No Commits\n\n*All projects have commits!*"
 
-        lines = ["## 📝 Repositories with No Commits",
+        lines = ["## 📝 Gerrit Projects with No Commits",
                  "",
-                 "These repositories were created but have never received any commits; they should be archived/removed:",
+                 "These Gerrit projects were created but have never received any commits; they should be archived/removed:",
                  "",
-                 "| Repository |",
+                 "| Gerrit Project |",
                  "|------------|"]
 
         for repo in no_commit_repos:
             name = repo.get("gerrit_project", "Unknown")
             lines.append(f"| {name} |")
 
-        lines.extend(["", f"**Total:** {len(no_commit_repos)} repositories with no commits"])
+        lines.extend(["", f"**Total:** {len(no_commit_repos)} Gerrit projects with no commits"])
         return "\n".join(lines)
 
     def _generate_deployed_workflows_section(self, data: dict[str, Any]) -> str:
@@ -2589,21 +2605,21 @@ class ReportRenderer:
         repositories = data.get("repositories", [])
 
         if not repositories:
-            return "## 🔧 Repository Features\n\n*No repositories analyzed.*"
+            return "## 🔧 Gerrit Project Features\n\n*No projects analyzed.*"
 
         # Sort repositories by primary metric (commits in last year)
         sorted_repos = sorted(repositories,
-                            key=lambda x: x.get("commit_counts", {}).get("last_365_days", 0),
-                            reverse=True)
+                             key=lambda r: r.get("commit_counts", {}).get("last_365_days", 0),
+                             reverse=True)
 
         # Get activity threshold for definition
         activity_threshold = self.config.get("activity_threshold_days", 365)
 
-        lines = ["## 🔧 Repository Feature Matrix",
+        lines = ["## 🔧 Gerrit Project Features",
                  "",
-                 f"*Feature analysis for all repositories. Active status based on commits within {activity_threshold} days.*",
+                 f"*Feature analysis for all Gerrit projects. Active status based on commits within {activity_threshold} days.*",
                  "",
-                 "| Repository | Type | Dependabot | Pre-commit | ReadTheDocs | Workflows | Active |",
+                 "| Gerrit Project | Type | Dependabot | Pre-commit | ReadTheDocs | Workflows | Active |",
                  "|------------|------|------------|------------|-------------|-----------|--------|"]
 
         for repo in sorted_repos:
@@ -2644,7 +2660,7 @@ class ReportRenderer:
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Repository Analysis Report</title>
+    <title>Gerrit Project Analysis Report</title>
     {self._get_datatable_css()}
     <style>
         body {{
