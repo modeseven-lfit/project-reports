@@ -135,8 +135,12 @@ jobs:
         # yamllint disable rule:line-length
         run: |
           echo "🔗 Cloning info-master repository for additional context data"
-          git clone "ssh://modesevenindustrialsolutions@gerrit.linuxfoundation.org:29418/releng/info-master" ./info-master
+          git clone "https://gerrit.linuxfoundation.org/infra/releng/info-master" ./info-master
           echo "✅ Info-master repository cloned successfully"
+          echo "📁 Sample files:"
+          find ./info-master -maxdepth 1 -name "*.yaml" | head -3
+          echo "📂 Sample directories:"
+          find ./info-master -maxdepth 1 -type d -name "gerrit.*" | head -3
         # yamllint enable rule:line-length
 
       - name: "Set up Python environment for ${{ matrix.project }}"

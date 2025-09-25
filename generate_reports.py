@@ -1280,6 +1280,7 @@ class FeatureRegistry:
         self.register("sonatype_config", self._check_sonatype_config)
         self.register("project_types", self._check_project_types)
         self.register("workflows", self._check_workflows)
+        self.register("gitreview", self._check_gitreview)
 
     def detect_features(self, repo_path: Path) -> dict[str, Any]:
         """
@@ -1730,6 +1731,36 @@ class FeatureRegistry:
             pass
 
         return workflow_info
+
+    def _check_gitreview(self, repo_path: Path) -> dict[str, Any]:
+        """Check for .gitreview configuration file."""
+        gitreview_file = repo_path / ".gitreview"
+        
+        if not gitreview_file.exists():
+            return {
+                "present": False,
+                "file": None,
+                "config": {}
+            }
+        
+        # Parse .gitreview file content
+        config = {}
+        try:
+            with open(gitreview_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#') and '=' in line:
+                        key, value = line.split('=', 1)
+                        config[key.strip()] = value.strip()
+        except (IOError, UnicodeDecodeError):
+            # File exists but couldn't be read
+            pass
+        
+        return {
+            "present": True,
+            "file": ".gitreview",
+            "config": config
+        }
 
 # =============================================================================
 # AGGREGATION AND RANKING (Phase 4 - TODO)
@@ -2688,8 +2719,8 @@ class ReportRenderer:
                  "",
                  f"Feature analysis for all Gerrit projects. Active status based on commits within {activity_threshold} days.",
                  "",
-                 "| Gerrit Project | Type | Dependabot | Pre-commit | ReadTheDocs | Workflows | Active |",
-                 "|------------|------|------------|------------|-------------|-----------|--------|"]
+                 "| Gerrit Project | Type | Dependabot | Pre-commit | ReadTheDocs | .gitreview | Workflows | Active |",
+                 "|------------|------|------------|------------|-------------|------------|-----------|--------|"]
 
         for repo in sorted_repos:
             name = repo.get("gerrit_project", "Unknown")
@@ -2703,13 +2734,14 @@ class ReportRenderer:
             dependabot = "✅" if features.get("dependabot", {}).get("present", False) else "❌"
             pre_commit = "✅" if features.get("pre_commit", {}).get("present", False) else "❌"
             readthedocs = "✅" if features.get("readthedocs", {}).get("present", False) else "❌"
+            gitreview = "✅" if features.get("gitreview", {}).get("present", False) else "❌"
 
             workflows = features.get("workflows", {}).get("count", 0)
             workflow_display = f"{workflows}" if workflows > 0 else "❌"
 
             status = "✅" if is_active else "⚠️"
 
-            lines.append(f"| {name} | {primary_type} | {dependabot} | {pre_commit} | {readthedocs} | {workflow_display} | {status} |")
+            lines.append(f"| {name} | {primary_type} | {dependabot} | {pre_commit} | {readthedocs} | {gitreview} | {workflow_display} | {status} |")
 
         return "\n".join(lines)
 
