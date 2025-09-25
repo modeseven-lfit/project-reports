@@ -1735,14 +1735,14 @@ class FeatureRegistry:
     def _check_gitreview(self, repo_path: Path) -> dict[str, Any]:
         """Check for .gitreview configuration file."""
         gitreview_file = repo_path / ".gitreview"
-        
+
         if not gitreview_file.exists():
             return {
                 "present": False,
                 "file": None,
                 "config": {}
             }
-        
+
         # Parse .gitreview file content
         config = {}
         try:
@@ -1755,7 +1755,7 @@ class FeatureRegistry:
         except (IOError, UnicodeDecodeError):
             # File exists but couldn't be read
             pass
-        
+
         return {
             "present": True,
             "file": ".gitreview",
@@ -1793,8 +1793,7 @@ class DataAggregator:
         activity_threshold_days = self.config.get("activity_threshold_days", 365)
         very_old_years = self.config.get("age_buckets", {}).get("very_old_years", 3)
         old_years = self.config.get("age_buckets", {}).get("old_years", 1)
-        top_n = self.config.get("output", {}).get("top_n_repos", 30)
-        bottom_n = self.config.get("output", {}).get("bottom_n_repos", 30)
+
 
         # Primary time window for rankings (usually last_365_days)
         primary_window = "last_365_days"
@@ -1857,20 +1856,31 @@ class DataAggregator:
         self.logger.info("Computing organization rollups")
         organizations = self.compute_org_rollups(authors)
 
-        # Build top active repositories (sorted by commits in primary window)
+        # Build complete repository list (all repositories sorted by activity)
+        # Combine active and inactive repositories for comprehensive view
+        all_repos = active_repos + inactive_repos
+
+        # Sort all repositories by commits in primary window (descending)
+        all_repositories_by_activity = self.rank_entities(
+            all_repos,
+            f"commit_counts.{primary_window}",
+            reverse=True,
+            limit=None  # No limit - show all repositories
+        )
+
+        # Keep the old separate lists for backward compatibility if needed
         top_active = self.rank_entities(
             active_repos,
             f"commit_counts.{primary_window}",
             reverse=True,
-            limit=top_n
+            limit=None  # Remove limit
         )
 
-        # Build least active repositories (inactive sorted by days since last commit, descending)
         least_active = self.rank_entities(
             inactive_repos,
             "days_since_last_commit",
             reverse=True,
-            limit=bottom_n
+            limit=None  # Remove limit
         )
 
         # Build contributor leaderboards
@@ -1915,6 +1925,7 @@ class DataAggregator:
             },
             "top_active_repositories": top_active,
             "least_active_repositories": least_active,
+            "all_repositories": all_repositories_by_activity,
             "no_commit_repositories": no_commit_repos,
             "top_contributors_commits": top_contributors_commits,
             "top_contributors_loc": top_contributors_loc,
@@ -2237,11 +2248,8 @@ class ReportRenderer:
         if include_sections.get("inactive_distributions", True):
             sections.append(self._generate_activity_distribution_section(data))
 
-        # Top active repositories
-        sections.append(self._generate_top_repositories_section(data))
-
-        # Least active repositories
-        sections.append(self._generate_least_active_repositories_section(data))
+        # Combined repositories table (replaces separate active/inactive tables)
+        sections.append(self._generate_all_repositories_section(data))
 
         # Repositories with no commits
         sections.append(self._generate_no_commit_repositories_section(data))
@@ -2399,24 +2407,27 @@ class ReportRenderer:
 
         return "\n".join(lines)
 
-    def _generate_top_repositories_section(self, data: dict[str, Any]) -> str:
-        """Generate top active repositories section."""
-        top_repos = data.get("summaries", {}).get("top_active_repositories", [])
+    def _generate_all_repositories_section(self, data: dict[str, Any]) -> str:
+        """Generate combined repositories table showing all Gerrit projects."""
+        all_repos = data.get("summaries", {}).get("all_repositories", [])
 
-        if not top_repos:
-            return "## 🏆 Top Active Repositories\n\nNo active repositories found."
+        if not all_repos:
+            return "## 📊 All Gerrit Repositories\n\nNo repositories found."
 
-        # Get activity threshold for definition
+        # Get configuration for definitions
         activity_threshold = self.config.get("activity_threshold_days", 365)
+        very_old_years = self.config.get("age_buckets", {}).get("very_old_years", 3)
+        old_years = self.config.get("age_buckets", {}).get("old_years", 1)
 
-        lines = ["## 🏆 Top Active Repositories",
+        lines = ["## 📊 All Gerrit Repositories",
                  "",
-                 f"Top repositories by commit activity in the last year. Status based on commits within {activity_threshold} days.",
+                 f"Complete list of all Gerrit repositories sorted by activity (commits in last year). Use column sorting to filter by different criteria.",
+                 f"**Activity Status:** Based on commits within {activity_threshold} days. **Age Categories:** Recent (≤{old_years}y), Old (≤{very_old_years}y), Very Old (>{very_old_years}y).",
                  "",
-                 "| Repository | Commits (1Y) | Net LOC (1Y) | Contributors | Last Commit Date | Status |",
-                 "|------------|--------------|--------------|--------------|------------------|--------|"]
+                 "| Repository | Commits (1Y) | Net LOC (1Y) | Contributors | Days Inactive | Last Commit Date | Activity Status | Age Category |",
+                 "|------------|--------------|--------------|--------------|---------------|------------------|-----------------|--------------|"]
 
-        for repo in top_repos:
+        for repo in all_repos:
             name = repo.get("gerrit_project", "Unknown")
             commits_1y = repo.get("commit_counts", {}).get("last_365_days", 0)
             loc_1y = repo.get("loc_stats", {}).get("last_365_days", {}).get("net", 0)
@@ -2427,55 +2438,25 @@ class ReportRenderer:
             is_active = repo.get("is_active", False)
 
             age_str = self._format_age(days_since)
-            status = "✅" if is_active else "⚠️"
-
-            lines.append(f"| {name} | {self._format_number(commits_1y)} | {self._format_number(loc_1y, signed=True)} | {contributors_1y} | {age_str} | {status} |")
-
-        return "\n".join(lines)
-
-    def _generate_least_active_repositories_section(self, data: dict[str, Any]) -> str:
-        """Generate least active repositories section."""
-        least_active = data.get("summaries", {}).get("least_active_repositories", [])
-
-        if not least_active:
-            return "## 📉 Least Active Repositories\n\nAll repositories are active!"
-
-        # Get configuration for category definitions
-        activity_threshold = self.config.get("activity_threshold_days", 365)
-        old_years = self.config.get("age_buckets", {}).get("old_years", 1)
-        very_old_years = self.config.get("age_buckets", {}).get("very_old_years", 3)
-
-        lines = ["## 📉 Least Active Repositories",
-                 "",
-                 f"Repositories inactive for more than {activity_threshold} days, categorized by inactivity period.",
-                 "",
-                 "| Repository | Days Inactive | Last Commits (1Y) | Last Commit Date | Age Category |",
-                 "|------------|---------------|-------------------|------------------|--------------|"]
-
-        for repo in least_active:
-            name = repo.get("gerrit_project", "Unknown")
-            days_since = repo.get("days_since_last_commit")
-            if days_since is None:
-                days_since = 999999  # Very large number for repos with no commits
-            commits_1y = repo.get("commit_counts", {}).get("last_365_days", 0)
-            age_str = self._format_age(days_since)
+            status = "✅ Active" if is_active else "⚠️ Inactive"
 
             # Categorize by age using config values
-            very_old_years = self.config.get("age_buckets", {}).get("very_old_years", 3)
-            old_years = self.config.get("age_buckets", {}).get("old_years", 1)
-
             days_to_years = 365.25
             age_years = days_since / days_to_years
 
             if age_years > very_old_years:
-                category = "🔴 Very Old"
+                age_category = "🔴 Very Old"
             elif age_years > old_years:
-                category = "🟡 Old"
+                age_category = "🟡 Old"
             else:
-                category = "⚠️ Recent"
+                age_category = "🟢 Recent"
 
-            lines.append(f"| {name} | {days_since:,} | {commits_1y} | {age_str} | {category} |")
+            # Format days inactive
+            days_inactive_str = f"{days_since:,}" if days_since < 999999 else "N/A"
 
+            lines.append(f"| {name} | {self._format_number(commits_1y)} | {self._format_number(loc_1y, signed=True)} | {contributors_1y} | {days_inactive_str} | {age_str} | {status} | {age_category} |")
+
+        lines.extend(["", f"**Total:** {len(all_repos)} repositories"])
         return "\n".join(lines)
 
     def _generate_no_commit_repositories_section(self, data: dict[str, Any]) -> str:
@@ -2942,19 +2923,22 @@ class ReportRenderer:
                     # Only add sortable class if feature is enabled and table has headers
                     sortable_enabled = self.config.get("html_tables", {}).get("sortable", True)
 
-                    # Check if this is the feature matrix table by looking for specific headers
+                    # Check if this is the feature matrix table or combined repositories table by looking for specific headers
                     is_feature_matrix = False
                     is_cicd_jobs = False
+                    is_all_repositories = False
                     if has_headers and i < len(lines):
                         table_header = line.lower()
                         if 'repository' in table_header and 'dependabot' in table_header and 'workflows' in table_header:
                             is_feature_matrix = True
                         elif 'repository' in table_header and ('github workflows' in table_header or 'jenkins jobs' in table_header):
                             is_cicd_jobs = True
+                        elif 'repository' in table_header and 'commits (1y)' in table_header and 'activity status' in table_header:
+                            is_all_repositories = True
 
                     table_class = ' class="sortable"' if (has_headers and sortable_enabled) else ''
-                    if is_feature_matrix or is_cicd_jobs:
-                        table_class = ' class="sortable no-pagination"'
+                    if is_feature_matrix or is_cicd_jobs or is_all_repositories:
+                        table_class = ' class="sortable no-pagination"' if is_feature_matrix or is_cicd_jobs else ' class="sortable"'
 
                     html_lines.append(f'<table{table_class}>')
                     in_table = True
