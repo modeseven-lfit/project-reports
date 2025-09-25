@@ -1847,14 +1847,14 @@ class DataAggregator:
             authors,
             f"commits.{primary_window}",
             reverse=True,
-            limit=top_n
+            limit=None
         )
 
         top_contributors_loc = self.rank_entities(
             authors,
             f"lines_net.{primary_window}",
             reverse=True,
-            limit=top_n
+            limit=None
         )
 
         # Build organization leaderboard
@@ -1862,7 +1862,7 @@ class DataAggregator:
             organizations,
             f"commits.{primary_window}",
             reverse=True,
-            limit=top_n
+            limit=None
         )
 
         # Build comprehensive summaries
@@ -2225,7 +2225,9 @@ class ReportRenderer:
         # Footer
         sections.append("Generated with ❤️ by Release Engineering")
 
-        return "\n\n".join(sections)
+        # Filter out empty sections to avoid unnecessary whitespace
+        non_empty_sections = [section for section in sections if section.strip()]
+        return "\n\n".join(non_empty_sections)
 
     def _generate_title_section(self, data: dict[str, Any]) -> str:
         """Generate title and metadata section."""
@@ -2283,7 +2285,7 @@ class ReportRenderer:
 | Total Gerrit Projects | {self._format_number(total_repos)} | 100% |
 | Active Gerrit Projects | {self._format_number(active_repos)} | {active_pct:.1f}% |
 | Inactive Gerrit Projects | {self._format_number(inactive_repos)} | {inactive_pct:.1f}% |
-| No Commits | {self._format_number(no_commit_repos)} | {no_commit_pct:.1f}% |
+| No Apparent Commits | {self._format_number(no_commit_repos)} | {no_commit_pct:.1f}% |
 | Total Contributors | {self._format_number(total_authors)} | - |
 | Organizations | {self._format_number(total_orgs)} | - |
 | Total Commits | {self._format_number(total_commits)} | - |
@@ -2318,7 +2320,7 @@ class ReportRenderer:
 
         sections = ["## 📅 Repository Activity Distribution",
                    "",
-                   f"*Repositories are considered inactive after {activity_threshold} days without commits.*"]
+                   f"Repositories are considered inactive after {activity_threshold} days without commits."]
 
         if very_old:
             sections.append(f"### 🔴 Very Old (>{very_old_years} years inactive)")
@@ -2339,7 +2341,7 @@ class ReportRenderer:
     def _generate_activity_table(self, repos: list[dict[str, Any]]) -> str:
         """Generate activity table for inactive repositories."""
         if not repos:
-            return "*No repositories in this category.*"
+            return "No repositories in this category."
 
         # Sort by days since last commit (descending)
         def sort_key(x):
@@ -2371,14 +2373,14 @@ class ReportRenderer:
         top_repos = data.get("summaries", {}).get("top_active_repositories", [])
 
         if not top_repos:
-            return "## 🏆 Top Active Repositories\n\n*No active repositories found.*"
+            return "## 🏆 Top Active Repositories\n\nNo active repositories found."
 
         # Get activity threshold for definition
         activity_threshold = self.config.get("activity_threshold_days", 365)
 
         lines = ["## 🏆 Top Active Repositories",
                  "",
-                 f"*Top repositories by commit activity in the last year. Status based on commits within {activity_threshold} days.*",
+                 f"Top repositories by commit activity in the last year. Status based on commits within {activity_threshold} days.",
                  "",
                  "| Repository | Commits (1Y) | Net LOC (1Y) | Contributors | Last Commit Date | Status |",
                  "|------------|--------------|--------------|--------------|------------------|--------|"]
@@ -2405,7 +2407,7 @@ class ReportRenderer:
         least_active = data.get("summaries", {}).get("least_active_repositories", [])
 
         if not least_active:
-            return "## 📉 Least Active Repositories\n\n*All repositories are active!*"
+            return "## 📉 Least Active Repositories\n\nAll repositories are active!"
 
         # Get configuration for category definitions
         activity_threshold = self.config.get("activity_threshold_days", 365)
@@ -2414,7 +2416,7 @@ class ReportRenderer:
 
         lines = ["## 📉 Least Active Repositories",
                  "",
-                 f"*Repositories inactive for more than {activity_threshold} days, categorized by inactivity period.*",
+                 f"Repositories inactive for more than {activity_threshold} days, categorized by inactivity period.",
                  "",
                  "| Repository | Days Inactive | Last Commits (1Y) | Last Commit Date | Age Category |",
                  "|------------|---------------|-------------------|------------------|--------------|"]
@@ -2450,11 +2452,11 @@ class ReportRenderer:
         no_commit_repos = data.get("summaries", {}).get("no_commit_repositories", [])
 
         if not no_commit_repos:
-            return "## 📝 Gerrit Projects with No Commits\n\n*All projects have commits!*"
+            return ""  # Skip output entirely if no data
 
-        lines = ["## 📝 Gerrit Projects with No Commits",
+        lines = ["## 📝 Gerrit Projects with No Apparent Commits",
                  "",
-                 "These Gerrit projects were created but have never received any commits; they should be archived/removed:",
+                 "**WARNING:** All Gerrit projects/repositories should contain at least one commit, due to the initial repository creation automation writing initial template and configuration files. The report generation and parsing logic may need checking/debugging for the projects/repositories below.",
                  "",
                  "| Gerrit Project |",
                  "|------------|"]
@@ -2463,7 +2465,7 @@ class ReportRenderer:
             name = repo.get("gerrit_project", "Unknown")
             lines.append(f"| {name} |")
 
-        lines.extend(["", f"**Total:** {len(no_commit_repos)} Gerrit projects with no commits"])
+        lines.extend(["", f"**Total:** {len(no_commit_repos)} Gerrit projects with no apparent commits"])
         return "\n".join(lines)
 
     def _generate_deployed_workflows_section(self, data: dict[str, Any]) -> str:
@@ -2471,7 +2473,7 @@ class ReportRenderer:
         repositories = data.get("repositories", [])
 
         if not repositories:
-            return "## 🏁 Deployed CI/CD Jobs\n\n*No repositories found.*"
+            return "## 🏁 Deployed CI/CD Jobs\n\nNo repositories found."
 
         # Collect repositories that have workflows or Jenkins jobs
         repos_with_cicd = []
@@ -2492,7 +2494,7 @@ class ReportRenderer:
                     has_any_jenkins = True
 
         if not repos_with_cicd:
-            return "## 🏁 Deployed CI/CD Jobs\n\n*No CI/CD jobs detected in any repositories.*"
+            return "## 🏁 Deployed CI/CD Jobs\n\nNo CI/CD jobs detected in any repositories."
 
         # Build table header based on whether Jenkins jobs exist
         if has_any_jenkins:
@@ -2520,31 +2522,91 @@ class ReportRenderer:
         return "\n".join(lines)
 
     def _generate_contributors_section(self, data: dict[str, Any]) -> str:
-        """Generate contributors leaderboards section."""
+        """Generate consolidated contributors table section."""
         top_commits = data.get("summaries", {}).get("top_contributors_commits", [])
         top_loc = data.get("summaries", {}).get("top_contributors_loc", [])
 
         sections = ["## 👥 Top Contributors"]
 
-        # Top by commits
-        if top_commits:
-            sections.append("### 🏅 Most Active by Commits (Last Year)")
-            sections.append(self._generate_contributors_table(top_commits, "commits"))
-
-        # Top by lines of code
-        if top_loc:
-            sections.append("### 📝 Most Active by Lines of Code (Last Year)")
-            sections.append(self._generate_contributors_table(top_loc, "lines"))
-
-        if not top_commits and not top_loc:
-            sections.append("*No contributor data available.*")
+        # Generate consolidated table with all contributors
+        if top_commits or top_loc:
+            sections.append("### 🏆 Most Active Contributors (Last Year)")
+            sections.append(self._generate_consolidated_contributors_table(top_commits, top_loc))
+        else:
+            sections.append("No contributor data available.")
 
         return "\n\n".join(sections)
+
+    def _generate_consolidated_contributors_table(self, top_commits: list[dict[str, Any]], top_loc: list[dict[str, Any]]) -> str:
+        """Generate consolidated contributors table with commits, LOC, and average LOC per commit."""
+        # Create a comprehensive list of all contributors from both lists
+        contributors_dict = {}
+
+        # Add contributors from commits list
+        for contributor in top_commits:
+            email = contributor.get("email", "")
+            contributors_dict[email] = contributor.copy()
+
+        # Merge data from LOC list
+        for contributor in top_loc:
+            email = contributor.get("email", "")
+            if email in contributors_dict:
+                # Update existing entry with LOC data
+                contributors_dict[email].update(contributor)
+            else:
+                # Add new entry
+                contributors_dict[email] = contributor.copy()
+
+        # Convert back to list and sort by total activity (commits + normalized LOC)
+        all_contributors = list(contributors_dict.values())
+
+        # Sort by commits first, then by LOC as secondary sort
+        all_contributors.sort(key=lambda x: (
+            x.get("commits", {}).get("last_365_days", 0),
+            x.get("lines_net", {}).get("last_365_days", 0)
+        ), reverse=True)
+
+        if not all_contributors:
+            return "No contributors found."
+
+        # Create table headers
+        lines = [
+            "| Rank | Contributor | Commits (1Y) | Lines of Code (1Y) | Avg LOC/Commit | Repositories | Organization |",
+            "|------|-------------|--------------|--------------------|--------------------|--------------|--------------|"
+        ]
+
+        for i, contributor in enumerate(all_contributors, 1):
+            name = contributor.get("name", "Unknown")
+            email = contributor.get("email", "")
+            domain = contributor.get("domain", "")
+            commits_1y = contributor.get("commits", {}).get("last_365_days", 0)
+            loc_1y = contributor.get("lines_net", {}).get("last_365_days", 0)
+            repos_1y = contributor.get("repositories_count", {}).get("last_365_days", 0)
+
+            # Calculate average LOC per commit
+            if commits_1y > 0:
+                avg_loc_per_commit = loc_1y / commits_1y
+                avg_display = f"{avg_loc_per_commit:+.1f}"
+            else:
+                avg_display = "-"
+
+            # Mask email for privacy (show first part + domain)
+            if email and "@" in email:
+                username = email.split("@")[0]
+                display_name = f"{name} ({username}@...)"
+            else:
+                display_name = name
+
+            org_display = domain if domain and domain != "unknown" else "-"
+
+            lines.append(f"| {i} | {display_name} | {self._format_number(commits_1y)} | {self._format_number(loc_1y, signed=True)} | {avg_display} | {repos_1y} | {org_display} |")
+
+        return "\n".join(lines)
 
     def _generate_contributors_table(self, contributors: list[dict[str, Any]], metric_type: str) -> str:
         """Generate contributors table for commits or LOC."""
         if not contributors:
-            return "*No contributors found.*"
+            return "No contributors found."
 
         if metric_type == "commits":
             lines = ["| Rank | Contributor | Commits (1Y) | Repositories | Organization |",
@@ -2582,12 +2644,12 @@ class ReportRenderer:
         top_orgs = data.get("summaries", {}).get("top_organizations", [])
 
         if not top_orgs:
-            return "## 🏢 Organizations\n\n*No organization data available.*"
+            return "## 🏢 Organizations\n\nNo organization data available."
 
         lines = ["## 🏢 Top Organizations (Last Year)",
                  "",
-                 "| Rank | Organization | Contributors | Commits | Net LOC | Repositories |",
-                 "|------|--------------|--------------|---------|---------|--------------|"]
+                 "| Rank | Organization | Contributors | Commits | Net LOC | Avg LOC/Commit | Repositories |",
+                 "|------|--------------|--------------|---------|---------|----------------|--------------|"]
 
         for i, org in enumerate(top_orgs, 1):
             domain = org.get("domain", "Unknown")
@@ -2596,7 +2658,14 @@ class ReportRenderer:
             loc_1y = org.get("lines_net", {}).get("last_365_days", 0)
             repos_1y = org.get("repositories_count", {}).get("last_365_days", 0)
 
-            lines.append(f"| {i} | {domain} | {contributors} | {self._format_number(commits_1y)} | {self._format_number(loc_1y, signed=True)} | {repos_1y} |")
+            # Calculate average LOC per commit
+            if commits_1y > 0:
+                avg_loc_per_commit = loc_1y / commits_1y
+                avg_display = f"{avg_loc_per_commit:+.1f}"
+            else:
+                avg_display = "-"
+
+            lines.append(f"| {i} | {domain} | {contributors} | {self._format_number(commits_1y)} | {self._format_number(loc_1y, signed=True)} | {avg_display} | {repos_1y} |")
 
         return "\n".join(lines)
 
@@ -2605,7 +2674,7 @@ class ReportRenderer:
         repositories = data.get("repositories", [])
 
         if not repositories:
-            return "## 🔧 Gerrit Project Features\n\n*No projects analyzed.*"
+            return "## 🔧 Gerrit Project Feature Matrix\n\nNo projects analyzed."
 
         # Sort repositories by primary metric (commits in last year)
         sorted_repos = sorted(repositories,
@@ -2615,9 +2684,9 @@ class ReportRenderer:
         # Get activity threshold for definition
         activity_threshold = self.config.get("activity_threshold_days", 365)
 
-        lines = ["## 🔧 Gerrit Project Features",
+        lines = ["## 🔧 Gerrit Project Feature Matrix",
                  "",
-                 f"*Feature analysis for all Gerrit projects. Active status based on commits within {activity_threshold} days.*",
+                 f"Feature analysis for all Gerrit projects. Active status based on commits within {activity_threshold} days.",
                  "",
                  "| Gerrit Project | Type | Dependabot | Pre-commit | ReadTheDocs | Workflows | Active |",
                  "|------------|------|------------|------------|-------------|-----------|--------|"]
@@ -3122,6 +3191,31 @@ class RepositoryReporter:
         self.aggregator = DataAggregator(config, logger)
         self.renderer = ReportRenderer(config, logger)
 
+    def _clone_info_master_repo(self, repos_path: Path) -> None:
+        """Clone the info-master repository for additional context data."""
+        info_master_path = repos_path / "info-master"
+        info_master_url = "ssh://modesevenindustrialsolutions@gerrit.linuxfoundation.org:29418/releng/info-master"
+
+        if info_master_path.exists():
+            self.logger.info(f"Info-master repository already exists at {info_master_path}")
+            # Update existing repository
+            success, output = safe_git_command(["git", "pull"], info_master_path, self.logger)
+            if success:
+                self.logger.info("Successfully updated info-master repository")
+            else:
+                self.logger.warning(f"Failed to update info-master repository: {output}")
+        else:
+            self.logger.info(f"Cloning info-master repository to {info_master_path}")
+            success, output = safe_git_command(
+                ["git", "clone", info_master_url, str(info_master_path)],
+                repos_path,
+                self.logger
+            )
+            if success:
+                self.logger.info("Successfully cloned info-master repository")
+            else:
+                self.logger.error(f"Failed to clone info-master repository: {output}")
+
     def analyze_repositories(self, repos_path: Path) -> dict[str, Any]:
         """
         Main analysis workflow.
@@ -3131,6 +3225,9 @@ class RepositoryReporter:
         # Resolve to absolute path for consistent handling
         repos_path_abs = repos_path.resolve()
         self.logger.info(f"Starting repository analysis in {repos_path_abs}")
+
+        # Clone info-master repository for additional context
+        self._clone_info_master_repo(repos_path_abs)
 
         # Initialize data structure
         report_data = {

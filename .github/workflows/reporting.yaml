@@ -130,6 +130,15 @@ jobs:
           # for comprehensive data mining and reporting purposes
           move-conflicting: "true"
 
+      - name: "Clone info-master repository"
+        shell: bash
+        # yamllint disable rule:line-length
+        run: |
+          echo "🔗 Cloning info-master repository for additional context data"
+          git clone "ssh://modesevenindustrialsolutions@gerrit.linuxfoundation.org:29418/releng/info-master" ./info-master
+          echo "✅ Info-master repository cloned successfully"
+        # yamllint enable rule:line-length
+
       - name: "Set up Python environment for ${{ matrix.project }}"
         # yamllint disable-line rule:line-length
         uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
