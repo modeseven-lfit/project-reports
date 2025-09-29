@@ -124,7 +124,10 @@ jobs:
           path-prefix: "./${{ matrix.gerrit }}"
           skip-archived: "true"
           threads: "4"
-          clone-timeout: "300"
+          clone-timeout: "600"
+          retry-attempts: "5"
+          retry-base-delay: "3.0"
+          retry-max-delay: "60.0"
           use-https: "true"
           # Enable move-conflicting to ensure 100% repository availability
           # for comprehensive data mining and reporting purposes
@@ -211,7 +214,17 @@ jobs:
         with:
           name: clone-manifest-${{ matrix.project }}
           path: "./${{ matrix.gerrit }}/clone-manifest.json"
-          retention-days: 30
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: "Upload gerrit clone log"
+        if: always()
+        # yamllint disable-line rule:line-length
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: gerrit-clone-log-${{ matrix.project }}
+          path: "./${{ matrix.gerrit }}.log"
+          retention-days: 14
           if-no-files-found: warn
 
       - name: "Upload analysis reports"
