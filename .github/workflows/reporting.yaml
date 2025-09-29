@@ -123,7 +123,8 @@ jobs:
           host: ${{ matrix.gerrit }}
           path-prefix: "./${{ matrix.gerrit }}"
           skip-archived: "true"
-          threads: "4"
+          # LF Broadband struggles with load and operations can timeout
+          threads: ${{ matrix.project == 'LF Broadband' && '1' || '4' }}
           clone-timeout: "600"
           retry-attempts: "5"
           retry-base-delay: "3.0"
