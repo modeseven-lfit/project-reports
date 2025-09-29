@@ -2424,8 +2424,8 @@ class ReportRenderer:
                  f"Complete list of all Gerrit repositories sorted by activity (commits in last year). Use column sorting to filter by different criteria.",
                  f"**Activity Status:** Based on commits within {activity_threshold} days. **Age Categories:** Recent (≤{old_years}y), Old (≤{very_old_years}y), Very Old (>{very_old_years}y).",
                  "",
-                 "| Repository | Commits (1Y) | Net LOC (1Y) | Contributors | Days Inactive | Last Commit Date | Activity Status | Age Category |",
-                 "|------------|--------------|--------------|--------------|---------------|------------------|-----------------|--------------|"]
+                 "| Repository | Commits | Net LOC | Contributors | Days Inactive | Last Commit Date | Activity Status | Age Category |",
+                 "|------------|---------|---------|--------------|---------------|------------------|-----------------|--------------|"]
 
         for repo in all_repos:
             name = repo.get("gerrit_project", "Unknown")
@@ -2454,7 +2454,7 @@ class ReportRenderer:
             # Format days inactive
             days_inactive_str = f"{days_since:,}" if days_since < 999999 else "N/A"
 
-            lines.append(f"| {name} | {self._format_number(commits_1y)} | {self._format_number(loc_1y, signed=True)} | {contributors_1y} | {days_inactive_str} | {age_str} | {status} | {age_category} |")
+            lines.append(f"| {name} | {commits_1y} | {int(loc_1y):+d} | {contributors_1y} | {days_inactive_str} | {age_str} | {status} | {age_category} |")
 
         lines.extend(["", f"**Total:** {len(all_repos)} repositories"])
         return "\n".join(lines)
@@ -2583,8 +2583,8 @@ class ReportRenderer:
 
         # Create table headers
         lines = [
-            "| Rank | Contributor | Commits (1Y) | Lines of Code (1Y) | Avg LOC/Commit | Repositories | Organization |",
-            "|------|-------------|--------------|--------------------|--------------------|--------------|--------------|"
+            "| Rank | Contributor | Commits | Lines of Code | Avg LOC/Commit | Repositories | Organization |",
+            "|------|-------------|---------|---------------|----------------|--------------|--------------|"
         ]
 
         for i, contributor in enumerate(all_contributors, 1):
@@ -2611,7 +2611,7 @@ class ReportRenderer:
 
             org_display = domain if domain and domain != "unknown" else "-"
 
-            lines.append(f"| {i} | {display_name} | {self._format_number(commits_1y)} | {self._format_number(loc_1y, signed=True)} | {avg_display} | {repos_1y} | {org_display} |")
+            lines.append(f"| {i} | {display_name} | {commits_1y} | {int(loc_1y):+d} | {avg_display} | {repos_1y} | {org_display} |")
 
         return "\n".join(lines)
 
@@ -2621,11 +2621,11 @@ class ReportRenderer:
             return "No contributors found."
 
         if metric_type == "commits":
-            lines = ["| Rank | Contributor | Commits (1Y) | Repositories | Organization |",
-                     "|------|-------------|--------------|--------------|--------------|"]
+            lines = ["| Rank | Contributor | Commits | Repositories | Organization |",
+                     "|------|-------------|---------|--------------|--------------|"]
         else:
-            lines = ["| Rank | Contributor | Net LOC (1Y) | Commits (1Y) | Repositories | Organization |",
-                     "|------|-------------|---------------|--------------|--------------|--------------|"]
+            lines = ["| Rank | Contributor | Net LOC | Commits | Repositories | Organization |",
+                     "|------|-------------|---------|---------|--------------|--------------|"]
 
         for i, contributor in enumerate(contributors, 1):
             name = contributor.get("name", "Unknown")
@@ -2645,9 +2645,9 @@ class ReportRenderer:
             org_display = domain if domain and domain != "unknown" else "-"
 
             if metric_type == "commits":
-                lines.append(f"| {i} | {display_name} | {self._format_number(commits_1y)} | {repos_1y} | {org_display} |")
+                lines.append(f"| {i} | {display_name} | {commits_1y} | {repos_1y} | {org_display} |")
             else:
-                lines.append(f"| {i} | {display_name} | {self._format_number(loc_1y, signed=True)} | {self._format_number(commits_1y)} | {repos_1y} | {org_display} |")
+                lines.append(f"| {i} | {display_name} | {int(loc_1y):+d} | {commits_1y} | {repos_1y} | {org_display} |")
 
         return "\n".join(lines)
 
@@ -2677,7 +2677,7 @@ class ReportRenderer:
             else:
                 avg_display = "-"
 
-            lines.append(f"| {i} | {domain} | {contributors} | {self._format_number(commits_1y)} | {self._format_number(loc_1y, signed=True)} | {avg_display} | {repos_1y} |")
+            lines.append(f"| {i} | {domain} | {contributors} | {commits_1y} | {int(loc_1y):+d} | {avg_display} | {repos_1y} |")
 
         return "\n".join(lines)
 
@@ -2933,7 +2933,7 @@ class ReportRenderer:
                             is_feature_matrix = True
                         elif 'repository' in table_header and ('github workflows' in table_header or 'jenkins jobs' in table_header):
                             is_cicd_jobs = True
-                        elif 'repository' in table_header and 'commits (1y)' in table_header and 'activity status' in table_header:
+                        elif 'repository' in table_header and 'commits' in table_header and 'activity status' in table_header:
                             is_all_repositories = True
 
                     table_class = ' class="sortable"' if (has_headers and sortable_enabled) else ''
