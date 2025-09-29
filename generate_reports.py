@@ -2337,9 +2337,9 @@ class ReportRenderer:
 | Total Commits | {self._format_number(total_commits)} | - |
 | Total Lines of Code | {self._format_number(total_lines_added)} | - |
 
-- **✅ Current** commits within last {current_threshold} days
-- **☑️ Active** no commits between {current_threshold}-{active_threshold} days
-- **🛑 Inactive** no commits in {active_threshold}+ days"""
+**✅ Current** commits within last {current_threshold} days
+**☑️ Active** commits between {current_threshold}-{active_threshold} days
+**🛑 Inactive** no commits in {active_threshold}+ days"""
 
     def _generate_activity_distribution_section(self, data: dict[str, Any]) -> str:
         """Generate repository activity distribution section."""
@@ -2389,7 +2389,7 @@ class ReportRenderer:
         lines = ["## 📊 All Gerrit Repositories",
                  "",
                  f"Complete list of all Gerrit repositories sorted by activity (commits in last year). Use column sorting to filter by different criteria.",
-                 f"**Activity Status:** ✅ Current ({current_threshold}d), ☑️ Active ({current_threshold}-{active_threshold}d), 🛑 Inactive ({active_threshold}+d).",
+                 f"**Activity Status:** ✅ Current ☑️ Active 🛑 Inactive",
                  "",
                  "| Gerrit Project | Commits | Net LOC | Contributors | Days Inactive | Last Commit Date | Status |",
                  "|----------------|---------|---------|--------------|---------------|------------------|--------|"]
@@ -2463,7 +2463,8 @@ class ReportRenderer:
                 repos_with_cicd.append({
                     "gerrit_project": repo.get("gerrit_project", "Unknown"),
                     "workflow_names": workflow_names,
-                    "jenkins_job_names": jenkins_job_names
+                    "jenkins_job_names": jenkins_job_names,
+                    "job_count": len(jenkins_job_names)
                 })
                 if jenkins_job_names:
                     has_any_jenkins = True
@@ -2475,23 +2476,24 @@ class ReportRenderer:
         if has_any_jenkins:
             lines = ["## 🏁 Deployed CI/CD Jobs",
                      "",
-                     "| Gerrit Project | GitHub Workflows | Jenkins Jobs |",
-                     "|----------------|-------------------|--------------|"]
+                     "| Gerrit Project | GitHub Workflows | Jenkins Jobs | Job Count |",
+                     "|----------------|-------------------|--------------|-----------|"]
         else:
             lines = ["## 🏁 Deployed CI/CD Jobs",
                      "",
-                     "| Gerrit Project | GitHub Workflows |",
-                     "|----------------|-------------------|"]
+                     "| Gerrit Project | GitHub Workflows | Job Count |",
+                     "|----------------|-------------------|-----------|"]
 
         for repo in sorted(repos_with_cicd, key=lambda x: x["gerrit_project"]):
             name = repo["gerrit_project"]
             workflow_names_str = "<br>".join(sorted(repo["workflow_names"])) if repo["workflow_names"] else ""
+            job_count = repo["job_count"]
 
             if has_any_jenkins:
                 jenkins_names_str = "<br>".join(sorted(repo["jenkins_job_names"])) if repo["jenkins_job_names"] else ""
-                lines.append(f"| {name} | {workflow_names_str} | {jenkins_names_str} |")
+                lines.append(f"| {name} | {workflow_names_str} | {jenkins_names_str} | {job_count} |")
             else:
-                lines.append(f"| {name} | {workflow_names_str} |")
+                lines.append(f"| {name} | {workflow_names_str} | {job_count} |")
 
         lines.extend(["", f"**Total:** {len(repos_with_cicd)} repositories with CI/CD jobs"])
         return "\n".join(lines)
@@ -2565,12 +2567,8 @@ class ReportRenderer:
             else:
                 avg_display = "-"
 
-            # Mask email for privacy (show first part + domain)
-            if email and "@" in email:
-                username = email.split("@")[0]
-                display_name = f"{name} ({username}@...)"
-            else:
-                display_name = name
+            # Use just the name without email for privacy
+            display_name = name
 
             org_display = domain if domain and domain != "unknown" else "-"
 
@@ -2598,12 +2596,8 @@ class ReportRenderer:
             loc_1y = contributor.get("lines_net", {}).get("last_365_days", 0)
             repos_1y = contributor.get("repositories_count", {}).get("last_365_days", 0)
 
-            # Mask email for privacy (show first part + domain)
-            if email and "@" in email:
-                username = email.split("@")[0]
-                display_name = f"{name} ({username}@...)"
-            else:
-                display_name = name
+            # Use just the name without email for privacy
+            display_name = name
 
             org_display = domain if domain and domain != "unknown" else "-"
 
@@ -2662,7 +2656,7 @@ class ReportRenderer:
 
         lines = ["## 🔧 Gerrit Project Feature Matrix",
                  "",
-                 f"Feature analysis for all Gerrit projects. Status: ✅ Current ({current_threshold}d), ☑️ Active ({current_threshold}-{active_threshold}d), 🛑 Inactive ({active_threshold}+d).",
+                 f"Feature analysis for all Gerrit projects. Status: ✅ Current ☑️ Active 🛑 Inactive",
                  "",
                  "| Gerrit Project | Type | Dependabot | Pre-commit | ReadTheDocs | .gitreview | Workflows | Status |",
                  "|------------|------|------------|------------|-------------|------------|-----------|--------|"]
@@ -2684,13 +2678,13 @@ class ReportRenderer:
             workflows = features.get("workflows", {}).get("count", 0)
             workflow_display = f"{workflows}" if workflows > 0 else "❌"
 
-            # Map activity status to display format
+            # Map activity status to display format (emoji only)
             status_map = {
-                "current": "✅ Current",
-                "active": "☑️ Active",
-                "inactive": "🛑 Inactive"
+                "current": "✅",
+                "active": "☑️",
+                "inactive": "🛑"
             }
-            status = status_map.get(activity_status, "🛑 Inactive")
+            status = status_map.get(activity_status, "🛑")
 
             lines.append(f"| {name} | {primary_type} | {dependabot} | {pre_commit} | {readthedocs} | {gitreview} | {workflow_display} | {status} |")
 
@@ -2897,6 +2891,7 @@ class ReportRenderer:
                     is_feature_matrix = False
                     is_cicd_jobs = False
                     is_all_repositories = False
+                    is_global_summary = False
                     if has_headers and i < len(lines):
                         table_header = line.lower()
                         if 'repository' in table_header and 'dependabot' in table_header and 'workflows' in table_header:
@@ -2905,10 +2900,14 @@ class ReportRenderer:
                             is_cicd_jobs = True
                         elif 'repository' in table_header and 'commits' in table_header and 'activity status' in table_header:
                             is_all_repositories = True
+                        elif 'metric' in table_header and 'count' in table_header and 'percentage' in table_header:
+                            is_global_summary = True
 
                     table_class = ' class="sortable"' if (has_headers and sortable_enabled) else ''
                     if is_feature_matrix or is_cicd_jobs or is_all_repositories:
                         table_class = ' class="sortable no-pagination"' if is_feature_matrix or is_cicd_jobs else ' class="sortable"'
+                    elif is_global_summary:
+                        table_class = ' class="no-search no-pagination"'
 
                     html_lines.append(f'<table{table_class}>')
                     in_table = True
@@ -3005,10 +3004,12 @@ class ReportRenderer:
 
                 // Check if this table should have pagination disabled
                 const noPagination = table.classList.contains('no-pagination');
+                const noSearch = table.classList.contains('no-search');
                 const usePagination = noPagination ? false : {pagination};
+                const useSearch = noSearch ? false : {searchable};
 
                 new simpleDatatables.DataTable(table, {{
-                    searchable: {searchable},
+                    searchable: useSearch,
                     sortable: {sortable},
                     paging: usePagination,
                     perPage: {per_page},
