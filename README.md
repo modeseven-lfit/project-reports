@@ -60,7 +60,9 @@ Project-specific configurations in `configuration/` directory:
 ```yaml
 # Example: O-RAN-SC.config
 project: "O-RAN-SC"
-activity_threshold_days: 548
+activity_thresholds:
+  current_days: 365
+  active_days: 1095
 time_windows:
   last_30_days: 30
   last_365_days: 365
@@ -83,6 +85,29 @@ reports/
     ├── config_resolved.json      # Applied configuration
     └── <PROJECT>_report_bundle.zip
 ```
+
+## 📊 Activity Status System
+
+The reporting system uses a unified three-tier activity classification:
+
+- **✅ Current**: Gerrit projects with commits within the last 365 days
+- **☑️ Active**: Gerrit projects with no commits between 365-1095 days
+- **🛑 Inactive**: Gerrit projects with no commits in 1095+ days
+
+### Configuration
+
+Configure thresholds in your project config file:
+
+```yaml
+activity_thresholds:
+  current_days: 365      # ✅ Current threshold
+  active_days: 1095      # ☑️ Active threshold (365-1095 range)
+  # Anything > 1095 days = 🛑 Inactive
+```
+
+This unified system replaces the previous separate "activity status" and
+"age categories" with a single, clear classification that appears consistently
+across all reports and tables.
 
 ## 🛠️ Dependencies
 
@@ -107,7 +132,7 @@ pip install -r requirements.txt
 
 - **Project Health Monitoring** - Track activity trends and contributor
   engagement
-- **Resource Planning** - Identify active vs inactive repositories
+- **Resource Planning** - Identify current, active, and inactive repositories
 - **Community Insights** - Understand contributor patterns and organizational
   involvement
 - **Release Planning** - Analyze development velocity and feature adoption

@@ -835,7 +835,7 @@ class GitDataCollector:
 
                 "last_commit_timestamp": None,
                 "days_since_last_commit": None,
-                "is_active": False,
+                "activity_status": "inactive",  # "current", "active", or "inactive"
                 "has_any_commits": False,  # Track if repo has ANY commits (regardless of time windows)
                 "total_commits_ever": 0,   # Total commits across all history
                 "commit_counts": {window: 0 for window in self.time_windows},
@@ -1137,9 +1137,18 @@ class GitDataCollector:
                     days_since = (now - last_commit_date).days
                     repo_metrics["days_since_last_commit"] = days_since
 
-                    # Determine if repository is active (based on recent commits in time windows)
-                    activity_threshold = self.config.get("activity_threshold_days", 365)
-                    repo_metrics["is_active"] = any(count > 0 for count in repo_metrics["commit_counts"].values()) and days_since <= activity_threshold
+                    # Determine activity status using unified thresholds
+                    current_threshold = self.config.get("activity_thresholds", {}).get("current_days", 365)
+                    active_threshold = self.config.get("activity_thresholds", {}).get("active_days", 1095)
+
+                    has_recent_commits = any(count > 0 for count in repo_metrics["commit_counts"].values())
+
+                    if has_recent_commits and days_since <= current_threshold:
+                        repo_metrics["activity_status"] = "current"
+                    elif has_recent_commits and days_since <= active_threshold:
+                        repo_metrics["activity_status"] = "active"
+                    else:
+                        repo_metrics["activity_status"] = "inactive"
 
                     # Log appropriate message based on activity
                     if any(count > 0 for count in repo_metrics["commit_counts"].values()):
@@ -1789,21 +1798,18 @@ class DataAggregator:
         # Debug: Analyze repository commit status
         self._analyze_repository_commit_status(repo_metrics)
 
-        # Configuration values
-        activity_threshold_days = self.config.get("activity_threshold_days", 365)
-        very_old_years = self.config.get("age_buckets", {}).get("very_old_years", 3)
-        old_years = self.config.get("age_buckets", {}).get("old_years", 1)
+        # Configuration values for unified activity status
+        current_threshold = self.config.get("activity_thresholds", {}).get("current_days", 365)
+        active_threshold = self.config.get("activity_thresholds", {}).get("active_days", 1095)
 
 
         # Primary time window for rankings (usually last_365_days)
         primary_window = "last_365_days"
 
-        # Classify repositories by activity
+        # Classify repositories by unified activity status
+        current_repos = []
         active_repos = []
         inactive_repos = []
-        very_old_repos = []
-        old_repos = []
-        recent_inactive_repos = []
 
         total_commits = 0
         total_lines_added = 0
@@ -1823,31 +1829,20 @@ class DataAggregator:
                 # Repository with no commits - separate category
                 no_commit_repos.append(repo)
             else:
-                # Repository has commits - categorize by activity
+                # Repository has commits - categorize by unified activity status
                 # Handle case where days_since_last_commit might be None
                 if days_since_last is None:
-                    # If we have commits but no days_since_last, treat as very old
+                    # If we have commits but no days_since_last, treat as inactive
                     inactive_repos.append(repo)
-                    very_old_repos.append(repo)
                 else:
-                    is_active = days_since_last <= activity_threshold_days
+                    activity_status = repo.get("activity_status", "inactive")
 
-                    if is_active:
+                    if activity_status == "current":
+                        current_repos.append(repo)
+                    elif activity_status == "active":
                         active_repos.append(repo)
                     else:
                         inactive_repos.append(repo)
-
-                        # Categorize inactive repositories by age
-                        days_to_years = 365.25
-                        age_years = days_since_last / days_to_years
-                        if age_years > very_old_years:
-                            very_old_repos.append(repo)
-                        elif age_years > old_years:
-                            old_repos.append(repo)
-                        else:
-                            # Recent inactive: inactive but less than old_years threshold
-                            # This should only include repos inactive for less than old_years
-                            recent_inactive_repos.append(repo)
 
         # Aggregate author and organization data
         self.logger.info("Computing author rollups")
@@ -1857,8 +1852,8 @@ class DataAggregator:
         organizations = self.compute_org_rollups(authors)
 
         # Build complete repository list (all repositories sorted by activity)
-        # Combine active and inactive repositories for comprehensive view
-        all_repos = active_repos + inactive_repos
+        # Combine all activity status repositories for comprehensive view
+        all_repos = current_repos + active_repos + inactive_repos
 
         # Sort all repositories by commits in primary window (descending)
         all_repositories_by_activity = self.rank_entities(
@@ -1868,19 +1863,26 @@ class DataAggregator:
             limit=None  # No limit - show all repositories
         )
 
-        # Keep the old separate lists for backward compatibility if needed
+        # Keep separate lists for different activity statuses
+        top_current = self.rank_entities(
+            current_repos,
+            f"commit_counts.{primary_window}",
+            reverse=True,
+            limit=None
+        )
+
         top_active = self.rank_entities(
             active_repos,
             f"commit_counts.{primary_window}",
             reverse=True,
-            limit=None  # Remove limit
+            limit=None
         )
 
         least_active = self.rank_entities(
             inactive_repos,
             "days_since_last_commit",
             reverse=True,
-            limit=None  # Remove limit
+            limit=None
         )
 
         # Build contributor leaderboards
@@ -1910,6 +1912,7 @@ class DataAggregator:
         summaries = {
             "counts": {
                 "total_repositories": len(repo_metrics),
+                "current_repositories": len(current_repos),
                 "active_repositories": len(active_repos),
                 "inactive_repositories": len(inactive_repos),
                 "no_commit_repositories": len(no_commit_repos),
@@ -1918,11 +1921,12 @@ class DataAggregator:
                 "total_authors": len(authors),
                 "total_organizations": len(organizations),
             },
-            "activity_distribution": {
-                "very_old": [{"gerrit_project": r.get("gerrit_project", "Unknown"), "days_since_last_commit": r.get("days_since_last_commit") if r.get("days_since_last_commit") is not None else 999999} for r in very_old_repos],
-                "old": [{"gerrit_project": r.get("gerrit_project", "Unknown"), "days_since_last_commit": r.get("days_since_last_commit") if r.get("days_since_last_commit") is not None else 999999} for r in old_repos],
-                "recent_inactive": [{"gerrit_project": r.get("gerrit_project", "Unknown"), "days_since_last_commit": r.get("days_since_last_commit") if r.get("days_since_last_commit") is not None else 999999} for r in recent_inactive_repos],
+            "activity_status_distribution": {
+                "current": [{"gerrit_project": r.get("gerrit_project", "Unknown"), "days_since_last_commit": r.get("days_since_last_commit") if r.get("days_since_last_commit") is not None else 999999} for r in current_repos],
+                "active": [{"gerrit_project": r.get("gerrit_project", "Unknown"), "days_since_last_commit": r.get("days_since_last_commit") if r.get("days_since_last_commit") is not None else 999999} for r in active_repos],
+                "inactive": [{"gerrit_project": r.get("gerrit_project", "Unknown"), "days_since_last_commit": r.get("days_since_last_commit") if r.get("days_since_last_commit") is not None else 999999} for r in inactive_repos],
             },
+            "top_current_repositories": top_current,
             "top_active_repositories": top_active,
             "least_active_repositories": least_active,
             "all_repositories": all_repositories_by_activity,
@@ -1932,7 +1936,7 @@ class DataAggregator:
             "top_organizations": top_organizations,
         }
 
-        self.logger.info(f"Aggregation complete: {len(active_repos)} active, {len(inactive_repos)} inactive, {len(no_commit_repos)} no-commit repositories")
+        self.logger.info(f"Aggregation complete: {len(current_repos)} current, {len(active_repos)} active, {len(inactive_repos)} inactive, {len(no_commit_repos)} no-commit repositories")
         self.logger.info(f"Found {len(authors)} authors across {len(organizations)} organizations")
 
         return summaries
@@ -2273,6 +2277,7 @@ class ReportRenderer:
         project = data.get("project", "Repository Analysis")
         generated_at = data.get("generated_at", "")
         total_repos = data.get("summaries", {}).get("counts", {}).get("total_repositories", 0)
+        current_repos = data.get("summaries", {}).get("counts", {}).get("current_repositories", 0)
         active_repos = data.get("summaries", {}).get("counts", {}).get("active_repositories", 0)
         total_authors = data.get("summaries", {}).get("counts", {}).get("total_authors", 0)
 
@@ -2290,7 +2295,7 @@ class ReportRenderer:
         return f"""# 📊 Gerrit Project Analysis Report: {project}
 
 **Generated:** {formatted_time}
-**Gerrit Projects Analyzed:** {total_repos} ({active_repos} active)
+**Gerrit Projects Analyzed:** {total_repos} ({current_repos} current, {active_repos} active)
 **Contributors Found:** {total_authors:,}
 **Schema Version:** {data.get("schema_version", "1.0.0")}"""
 
@@ -2299,6 +2304,7 @@ class ReportRenderer:
         counts = data.get("summaries", {}).get("counts", {})
 
         total_repos = counts.get("total_repositories", 0)
+        current_repos = counts.get("current_repositories", 0)
         active_repos = counts.get("active_repositories", 0)
         inactive_repos = counts.get("inactive_repositories", 0)
         no_commit_repos = counts.get("no_commit_repositories", 0)
@@ -2308,20 +2314,21 @@ class ReportRenderer:
         total_orgs = counts.get("total_organizations", 0)
 
         # Calculate percentages
+        current_pct = (current_repos / total_repos * 100) if total_repos > 0 else 0
         active_pct = (active_repos / total_repos * 100) if total_repos > 0 else 0
         inactive_pct = (inactive_repos / total_repos * 100) if total_repos > 0 else 0
         no_commit_pct = (no_commit_repos / total_repos * 100) if total_repos > 0 else 0
 
         # Get configuration thresholds for definitions
-        activity_threshold = self.config.get("activity_threshold_days", 365)
-        old_years = self.config.get("age_buckets", {}).get("old_years", 1)
-        very_old_years = self.config.get("age_buckets", {}).get("very_old_years", 3)
+        current_threshold = self.config.get("activity_thresholds", {}).get("current_days", 365)
+        active_threshold = self.config.get("activity_thresholds", {}).get("active_days", 1095)
 
         return f"""## 📈 Global Summary
 
 | Metric | Count | Percentage |
 |--------|-------|------------|
 | Total Gerrit Projects | {self._format_number(total_repos)} | 100% |
+| Current Gerrit Projects | {self._format_number(current_repos)} | {current_pct:.1f}% |
 | Active Gerrit Projects | {self._format_number(active_repos)} | {active_pct:.1f}% |
 | Inactive Gerrit Projects | {self._format_number(inactive_repos)} | {inactive_pct:.1f}% |
 | No Apparent Commits | {self._format_number(no_commit_repos)} | {no_commit_pct:.1f}% |
@@ -2330,52 +2337,13 @@ class ReportRenderer:
 | Total Commits | {self._format_number(total_commits)} | - |
 | Total Lines of Code | {self._format_number(total_lines_added)} | - |
 
-### Activity Status Definitions
-
-- **✅ Active**: Gerrit project has commits within the last {activity_threshold} days
-- **⚠️ Inactive**: Gerrit project has no commits within the last {activity_threshold} days
-
-### Age Category Definitions (for inactive repositories)
-
-- **⚠️ Recent**: Inactive for less than {old_years} year{'s' if old_years != 1 else ''}
-- **🟡 Old**: Inactive for {old_years}-{very_old_years} years
-- **🔴 Very Old**: Inactive for more than {very_old_years} years"""
+- **✅ Current** commits within last {current_threshold} days
+- **☑️ Active** no commits between {current_threshold}-{active_threshold} days
+- **🛑 Inactive** no commits in {active_threshold}+ days"""
 
     def _generate_activity_distribution_section(self, data: dict[str, Any]) -> str:
         """Generate repository activity distribution section."""
-        activity_dist = data.get("summaries", {}).get("activity_distribution", {})
-
-        very_old = activity_dist.get("very_old", [])
-        old = activity_dist.get("old", [])
-        recent_inactive = activity_dist.get("recent_inactive", [])
-
-        if not (very_old or old or recent_inactive):
-            return "## 📅 Repository Activity Distribution\n\nAll repositories are currently active! 🎉"
-
-        # Get thresholds for consistent definitions
-        activity_threshold = self.config.get("activity_threshold_days", 365)
-        old_years = self.config.get("age_buckets", {}).get("old_years", 1)
-        very_old_years = self.config.get("age_buckets", {}).get("very_old_years", 3)
-
-        sections = ["## 📅 Repository Activity Distribution",
-                   "",
-                   f"Repositories are considered inactive after {activity_threshold} days without commits."]
-
-        if very_old:
-            sections.append(f"### 🔴 Very Old (>{very_old_years} years inactive)")
-            sections.append(self._generate_activity_table(very_old))
-
-        if old:
-            sections.append(f"### 🟡 Old ({old_years}-{very_old_years} years inactive)")
-            sections.append(self._generate_activity_table(old))
-
-        if recent_inactive:
-            # Use the actual old_years threshold from config for the heading
-            year_text = "year" if old_years == 1 else "years"
-            sections.append(f"### ⚠️ Recent Inactive (<{old_years} {year_text})")
-            sections.append(self._generate_activity_table(recent_inactive))
-
-        return "\n\n".join(sections)
+        return ""  # This section is now disabled
 
     def _generate_activity_table(self, repos: list[dict[str, Any]]) -> str:
         """Generate activity table for inactive repositories."""
@@ -2415,17 +2383,16 @@ class ReportRenderer:
             return "## 📊 All Gerrit Repositories\n\nNo repositories found."
 
         # Get configuration for definitions
-        activity_threshold = self.config.get("activity_threshold_days", 365)
-        very_old_years = self.config.get("age_buckets", {}).get("very_old_years", 3)
-        old_years = self.config.get("age_buckets", {}).get("old_years", 1)
+        current_threshold = self.config.get("activity_thresholds", {}).get("current_days", 365)
+        active_threshold = self.config.get("activity_thresholds", {}).get("active_days", 1095)
 
         lines = ["## 📊 All Gerrit Repositories",
                  "",
                  f"Complete list of all Gerrit repositories sorted by activity (commits in last year). Use column sorting to filter by different criteria.",
-                 f"**Activity Status:** Based on commits within {activity_threshold} days. **Age Categories:** Recent (≤{old_years}y), Old (≤{very_old_years}y), Very Old (>{very_old_years}y).",
+                 f"**Activity Status:** ✅ Current ({current_threshold}d), ☑️ Active ({current_threshold}-{active_threshold}d), 🛑 Inactive ({active_threshold}+d).",
                  "",
-                 "| Repository | Commits | Net LOC | Contributors | Days Inactive | Last Commit Date | Activity Status | Age Category |",
-                 "|------------|---------|---------|--------------|---------------|------------------|-----------------|--------------|"]
+                 "| Gerrit Project | Commits | Net LOC | Contributors | Days Inactive | Last Commit Date | Status |",
+                 "|----------------|---------|---------|--------------|---------------|------------------|--------|"]
 
         for repo in all_repos:
             name = repo.get("gerrit_project", "Unknown")
@@ -2435,26 +2402,22 @@ class ReportRenderer:
             days_since = repo.get("days_since_last_commit")
             if days_since is None:
                 days_since = 999999  # Very large number for repos with no commits
-            is_active = repo.get("is_active", False)
+            activity_status = repo.get("activity_status", "inactive")
 
             age_str = self._format_age(days_since)
-            status = "✅ Active" if is_active else "⚠️ Inactive"
 
-            # Categorize by age using config values
-            days_to_years = 365.25
-            age_years = days_since / days_to_years
-
-            if age_years > very_old_years:
-                age_category = "🔴 Very Old"
-            elif age_years > old_years:
-                age_category = "🟡 Old"
-            else:
-                age_category = "🟢 Recent"
+            # Map activity status to display format
+            status_map = {
+                "current": "✅ Current",
+                "active": "☑️ Active",
+                "inactive": "🛑 Inactive"
+            }
+            status = status_map.get(activity_status, "🛑 Inactive")
 
             # Format days inactive
             days_inactive_str = f"{days_since:,}" if days_since < 999999 else "N/A"
 
-            lines.append(f"| {name} | {commits_1y} | {int(loc_1y):+d} | {contributors_1y} | {days_inactive_str} | {age_str} | {status} | {age_category} |")
+            lines.append(f"| {name} | {commits_1y} | {int(loc_1y):+d} | {contributors_1y} | {days_inactive_str} | {age_str} | {status} |")
 
         lines.extend(["", f"**Total:** {len(all_repos)} repositories"])
         return "\n".join(lines)
@@ -2512,13 +2475,13 @@ class ReportRenderer:
         if has_any_jenkins:
             lines = ["## 🏁 Deployed CI/CD Jobs",
                      "",
-                     "| Repository | GitHub Workflows | Jenkins Jobs |",
-                     "|------------|-------------------|--------------|"]
+                     "| Gerrit Project | GitHub Workflows | Jenkins Jobs |",
+                     "|----------------|-------------------|--------------|"]
         else:
             lines = ["## 🏁 Deployed CI/CD Jobs",
                      "",
-                     "| Repository | GitHub Workflows |",
-                     "|------------|-------------------|"]
+                     "| Gerrit Project | GitHub Workflows |",
+                     "|----------------|-------------------|"]
 
         for repo in sorted(repos_with_cicd, key=lambda x: x["gerrit_project"]):
             name = repo["gerrit_project"]
@@ -2693,20 +2656,21 @@ class ReportRenderer:
                              key=lambda r: r.get("commit_counts", {}).get("last_365_days", 0),
                              reverse=True)
 
-        # Get activity threshold for definition
-        activity_threshold = self.config.get("activity_threshold_days", 365)
+        # Get activity thresholds for definition
+        current_threshold = self.config.get("activity_thresholds", {}).get("current_days", 365)
+        active_threshold = self.config.get("activity_thresholds", {}).get("active_days", 1095)
 
         lines = ["## 🔧 Gerrit Project Feature Matrix",
                  "",
-                 f"Feature analysis for all Gerrit projects. Active status based on commits within {activity_threshold} days.",
+                 f"Feature analysis for all Gerrit projects. Status: ✅ Current ({current_threshold}d), ☑️ Active ({current_threshold}-{active_threshold}d), 🛑 Inactive ({active_threshold}+d).",
                  "",
-                 "| Gerrit Project | Type | Dependabot | Pre-commit | ReadTheDocs | .gitreview | Workflows | Active |",
+                 "| Gerrit Project | Type | Dependabot | Pre-commit | ReadTheDocs | .gitreview | Workflows | Status |",
                  "|------------|------|------------|------------|-------------|------------|-----------|--------|"]
 
         for repo in sorted_repos:
             name = repo.get("gerrit_project", "Unknown")
             features = repo.get("features", {})
-            is_active = repo.get("is_active", False)
+            activity_status = repo.get("activity_status", "inactive")
 
             # Extract feature status
             project_types = features.get("project_types", {})
@@ -2720,7 +2684,13 @@ class ReportRenderer:
             workflows = features.get("workflows", {}).get("count", 0)
             workflow_display = f"{workflows}" if workflows > 0 else "❌"
 
-            status = "✅" if is_active else "⚠️"
+            # Map activity status to display format
+            status_map = {
+                "current": "✅ Current",
+                "active": "☑️ Active",
+                "inactive": "🛑 Inactive"
+            }
+            status = status_map.get(activity_status, "🛑 Inactive")
 
             lines.append(f"| {name} | {primary_type} | {dependabot} | {pre_commit} | {readthedocs} | {gitreview} | {workflow_display} | {status} |")
 
