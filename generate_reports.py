@@ -2325,6 +2325,10 @@ class ReportRenderer:
 
         return f"""## 📈 Global Summary
 
+**✅ Current** commits within last {current_threshold} days
+**☑️ Active** commits between {current_threshold}-{active_threshold} days
+**🛑 Inactive** no commits in {active_threshold}+ days
+
 | Metric | Count | Percentage |
 |--------|-------|------------|
 | Total Gerrit Projects | {self._format_number(total_repos)} | 100% |
@@ -2335,11 +2339,7 @@ class ReportRenderer:
 | Total Contributors | {self._format_number(total_authors)} | - |
 | Organizations | {self._format_number(total_orgs)} | - |
 | Total Commits | {self._format_number(total_commits)} | - |
-| Total Lines of Code | {self._format_number(total_lines_added)} | - |
-
-**✅ Current** commits within last {current_threshold} days
-**☑️ Active** commits between {current_threshold}-{active_threshold} days
-**🛑 Inactive** no commits in {active_threshold}+ days"""
+| Total Lines of Code | {self._format_number(total_lines_added)} | - |"""
 
     def _generate_activity_distribution_section(self, data: dict[str, Any]) -> str:
         """Generate repository activity distribution section."""
@@ -2406,13 +2406,13 @@ class ReportRenderer:
 
             age_str = self._format_age(days_since)
 
-            # Map activity status to display format
+            # Map activity status to display format (emoji only)
             status_map = {
-                "current": "✅ Current",
-                "active": "☑️ Active",
-                "inactive": "🛑 Inactive"
+                "current": "✅",
+                "active": "☑️",
+                "inactive": "🛑"
             }
-            status = status_map.get(activity_status, "🛑 Inactive")
+            status = status_map.get(activity_status, "🛑")
 
             # Format days inactive
             days_inactive_str = f"{days_since:,}" if days_since < 999999 else "N/A"
@@ -2464,6 +2464,7 @@ class ReportRenderer:
                     "gerrit_project": repo.get("gerrit_project", "Unknown"),
                     "workflow_names": workflow_names,
                     "jenkins_job_names": jenkins_job_names,
+                    "workflow_count": len(workflow_names),
                     "job_count": len(jenkins_job_names)
                 })
                 if jenkins_job_names:
@@ -2476,24 +2477,25 @@ class ReportRenderer:
         if has_any_jenkins:
             lines = ["## 🏁 Deployed CI/CD Jobs",
                      "",
-                     "| Gerrit Project | GitHub Workflows | Jenkins Jobs | Job Count |",
-                     "|----------------|-------------------|--------------|-----------|"]
+                     "| Gerrit Project | GitHub Workflows | Workflow Count | Jenkins Jobs | Job Count |",
+                     "|----------------|-------------------|----------------|--------------|-----------|"]
         else:
             lines = ["## 🏁 Deployed CI/CD Jobs",
                      "",
-                     "| Gerrit Project | GitHub Workflows | Job Count |",
-                     "|----------------|-------------------|-----------|"]
+                     "| Gerrit Project | GitHub Workflows | Workflow Count | Job Count |",
+                     "|----------------|-------------------|----------------|-----------|"]
 
         for repo in sorted(repos_with_cicd, key=lambda x: x["gerrit_project"]):
             name = repo["gerrit_project"]
             workflow_names_str = "<br>".join(sorted(repo["workflow_names"])) if repo["workflow_names"] else ""
+            workflow_count = repo["workflow_count"]
             job_count = repo["job_count"]
 
             if has_any_jenkins:
                 jenkins_names_str = "<br>".join(sorted(repo["jenkins_job_names"])) if repo["jenkins_job_names"] else ""
-                lines.append(f"| {name} | {workflow_names_str} | {jenkins_names_str} | {job_count} |")
+                lines.append(f"| {name} | {workflow_names_str} | {workflow_count} | {jenkins_names_str} | {job_count} |")
             else:
-                lines.append(f"| {name} | {workflow_names_str} | {job_count} |")
+                lines.append(f"| {name} | {workflow_names_str} | {workflow_count} | {job_count} |")
 
         lines.extend(["", f"**Total:** {len(repos_with_cicd)} repositories with CI/CD jobs"])
         return "\n".join(lines)
