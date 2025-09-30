@@ -2387,7 +2387,7 @@ class ReportRenderer:
         current_threshold = self.config.get("activity_thresholds", {}).get("current_days", 365)
         active_threshold = self.config.get("activity_thresholds", {}).get("active_days", 1095)
 
-        lines = ["## 📊 All Gerrit Repositories",
+        lines = ["## 📊 Gerrit Projects",
                  "",
                  f"Complete list of all Gerrit repositories sorted by activity (commits in last year). Use column sorting to filter by different criteria.",
                  f"**Activity Status:** ✅ Current ☑️ Active 🛑 Inactive",
@@ -2506,11 +2506,10 @@ class ReportRenderer:
         top_commits = data.get("summaries", {}).get("top_contributors_commits", [])
         top_loc = data.get("summaries", {}).get("top_contributors_loc", [])
 
-        sections = ["## 👥 Top Contributors"]
+        sections = ["## 👥 Top Contributors (Last Year)"]
 
         # Generate consolidated table with all contributors
         if top_commits or top_loc:
-            sections.append("### 🏆 Most Active Contributors (Last Year)")
             sections.append(self._generate_consolidated_contributors_table(top_commits, top_loc))
         else:
             sections.append("No contributor data available.")
@@ -2667,8 +2666,8 @@ class ReportRenderer:
                  "",
                  f"Feature analysis for all Gerrit projects. Status: ✅ Current ☑️ Active 🛑 Inactive",
                  "",
-                 "| Gerrit Project | Type | Dependabot | Pre-commit | ReadTheDocs | .gitreview | Workflows | Status |",
-                 "|------------|------|------------|------------|-------------|------------|-----------|--------|"]
+                 "| Gerrit Project | Type | Dependabot | Pre-commit | ReadTheDocs | .gitreview | Status |",
+                 "|------------|------|------------|------------|-------------|------------|--------|"]
 
         for repo in sorted_repos:
             name = repo.get("gerrit_project", "Unknown")
@@ -2684,9 +2683,6 @@ class ReportRenderer:
             readthedocs = "✅" if features.get("readthedocs", {}).get("present", False) else "❌"
             gitreview = "✅" if features.get("gitreview", {}).get("present", False) else "❌"
 
-            workflows = features.get("workflows", {}).get("count", 0)
-            workflow_display = f"{workflows}" if workflows > 0 else "❌"
-
             # Map activity status to display format (emoji only)
             status_map = {
                 "current": "✅",
@@ -2695,7 +2691,7 @@ class ReportRenderer:
             }
             status = status_map.get(activity_status, "🛑")
 
-            lines.append(f"| {name} | {primary_type} | {dependabot} | {pre_commit} | {readthedocs} | {gitreview} | {workflow_display} | {status} |")
+            lines.append(f"| {name} | {primary_type} | {dependabot} | {pre_commit} | {readthedocs} | {gitreview} | {status} |")
 
         return "\n".join(lines)
 
@@ -2854,6 +2850,22 @@ class ReportRenderer:
             color: white;
             border-color: #3498db;
         }}
+
+        /* Custom column widths for specific tables */
+        .feature-matrix-table th:nth-child(1) {{ width: 30%; }} /* Gerrit Project */
+        .feature-matrix-table th:nth-child(2) {{ width: 12%; }} /* Type */
+        .feature-matrix-table th:nth-child(3) {{ width: 12%; }} /* Dependabot */
+        .feature-matrix-table th:nth-child(4) {{ width: 12%; }} /* Pre-commit */
+        .feature-matrix-table th:nth-child(5) {{ width: 12%; }} /* ReadTheDocs */
+        .feature-matrix-table th:nth-child(6) {{ width: 12%; }} /* .gitreview */
+        .feature-matrix-table th:nth-child(7) {{ width: 10%; }} /* Status */
+
+        .cicd-jobs-table th:nth-child(1) {{ width: 30%; }} /* Gerrit Project */
+        .cicd-jobs-table th:nth-child(2) {{ width: 35%; }} /* GitHub Workflows */
+        .cicd-jobs-table th:nth-child(3) {{ width: 18%; }} /* Workflow Count */
+        .cicd-jobs-table th:nth-child(4) {{ width: 17%; }} /* Job Count */
+
+        .cicd-jobs-table th:nth-child(5) {{ width: 17%; }} /* Job Count (when Jenkins is present) */
     </style>
 </head>
 <body>
@@ -2903,18 +2915,22 @@ class ReportRenderer:
                     is_global_summary = False
                     if has_headers and i < len(lines):
                         table_header = line.lower()
-                        if 'repository' in table_header and 'dependabot' in table_header and 'workflows' in table_header:
+                        if 'gerrit project' in table_header and 'dependabot' in table_header and 'pre-commit' in table_header:
                             is_feature_matrix = True
-                        elif 'repository' in table_header and ('github workflows' in table_header or 'jenkins jobs' in table_header):
+                        elif 'gerrit project' in table_header and ('github workflows' in table_header or 'jenkins jobs' in table_header):
                             is_cicd_jobs = True
-                        elif 'repository' in table_header and 'commits' in table_header and 'activity status' in table_header:
+                        elif 'gerrit project' in table_header and 'commits' in table_header and 'status' in table_header:
                             is_all_repositories = True
                         elif 'metric' in table_header and 'count' in table_header and 'percentage' in table_header:
                             is_global_summary = True
 
                     table_class = ' class="sortable"' if (has_headers and sortable_enabled) else ''
-                    if is_feature_matrix or is_cicd_jobs or is_all_repositories:
-                        table_class = ' class="sortable no-pagination"' if is_feature_matrix or is_cicd_jobs else ' class="sortable"'
+                    if is_feature_matrix:
+                        table_class = ' class="sortable no-pagination feature-matrix-table"'
+                    elif is_cicd_jobs:
+                        table_class = ' class="sortable no-pagination cicd-jobs-table"'
+                    elif is_all_repositories:
+                        table_class = ' class="sortable"'
                     elif is_global_summary:
                         table_class = ' class="no-search no-pagination"'
 
