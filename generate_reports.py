@@ -2860,12 +2860,11 @@ class ReportRenderer:
         .feature-matrix-table th:nth-child(6) {{ width: 12%; }} /* .gitreview */
         .feature-matrix-table th:nth-child(7) {{ width: 10%; }} /* Status */
 
-        .cicd-jobs-table th:nth-child(1) {{ width: 30%; }} /* Gerrit Project */
-        .cicd-jobs-table th:nth-child(2) {{ width: 35%; }} /* GitHub Workflows */
-        .cicd-jobs-table th:nth-child(3) {{ width: 18%; }} /* Workflow Count */
-        .cicd-jobs-table th:nth-child(4) {{ width: 17%; }} /* Job Count */
-
-        .cicd-jobs-table th:nth-child(5) {{ width: 17%; }} /* Job Count (when Jenkins is present) */
+        .cicd-jobs-table th:nth-child(1) {{ width: 20%; }} /* Gerrit Project */
+        .cicd-jobs-table th:nth-child(2) {{ width: 24%; }} /* GitHub Workflows */
+        .cicd-jobs-table th:nth-child(3) {{ width: 12%; }} /* Workflows */
+        .cicd-jobs-table th:nth-child(4) {{ width: 32%; }} /* Jenkins Jobs */
+        .cicd-jobs-table th:nth-child(5) {{ width: 12%; }} /* Jobs */
     </style>
 </head>
 <body>
