@@ -2037,6 +2037,9 @@ class DataAggregator:
                 "lines_added": dict(data["lines_added"]),
                 "lines_removed": dict(data["lines_removed"]),
                 "lines_net": dict(data["lines_net"]),
+                "repositories_touched": {
+                    window: set(repos) for window, repos in data["repositories_touched"].items()
+                },
                 "repositories_count": {
                     window: len(repos) for window, repos in data["repositories_touched"].items()
                 },
@@ -2083,13 +2086,11 @@ class DataAggregator:
                 org_aggregates[domain]["lines_removed"][window_name] += author.get("lines_removed", {}).get(window_name, 0)
                 org_aggregates[domain]["lines_net"][window_name] += author.get("lines_net", {}).get(window_name, 0)
 
-                # Track repositories (approximate - we don't have per-author repo mapping here)
-                repo_count = author.get("repositories_count", {}).get(window_name, 0)
-                if repo_count > 0:
-                    # This is an approximation - we can't perfectly reconstruct which repos
-                    # Just use a placeholder set expansion
-                    for i in range(repo_count):
-                        org_aggregates[domain]["repositories_count"][window_name].add(f"repo_{i}_{author.get('email', '')}")
+                # Track unique repositories per organization
+                author_repos = author.get("repositories_touched", {}).get(window_name, set())
+                if author_repos:
+                    repos_set = cast(set[str], org_aggregates[domain]["repositories_count"][window_name])
+                    repos_set.update(author_repos)
 
         # Convert to list format
         organizations = []
@@ -2391,7 +2392,7 @@ class ReportRenderer:
                  f"Complete list of all Gerrit repositories sorted by activity (commits in last year). Use column sorting to filter by different criteria.",
                  f"**Activity Status:** ✅ Current ☑️ Active 🛑 Inactive",
                  "",
-                 "| Gerrit Project | Commits | Net LOC | Contributors | Days Inactive | Last Commit Date | Status |",
+                 "| Gerrit Project | Commits | LOC | Contributors | Days Inactive | Last Commit Date | Status |",
                  "|----------------|---------|---------|--------------|---------------|------------------|--------|"]
 
         for repo in all_repos:
@@ -2550,8 +2551,8 @@ class ReportRenderer:
 
         # Create table headers
         lines = [
-            "| Rank | Contributor | Commits | Lines of Code | Avg LOC/Commit | Repositories | Organization |",
-            "|------|-------------|---------|---------------|----------------|--------------|--------------|"
+            "| Rank | Contributor | Commits | LOC | Δ LOC | Avg LOC/Commit | Repositories | Organization |",
+            "|------|-------------|---------|-----|-------|----------------|--------------|--------------|"
         ]
 
         for i, contributor in enumerate(all_contributors, 1):
@@ -2560,6 +2561,9 @@ class ReportRenderer:
             domain = contributor.get("domain", "")
             commits_1y = contributor.get("commits", {}).get("last_365_days", 0)
             loc_1y = contributor.get("lines_net", {}).get("last_365_days", 0)
+            lines_added_1y = contributor.get("lines_added", {}).get("last_365_days", 0)
+            lines_removed_1y = contributor.get("lines_removed", {}).get("last_365_days", 0)
+            delta_loc_1y = abs(lines_added_1y) + abs(lines_removed_1y)
             repos_1y = contributor.get("repositories_count", {}).get("last_365_days", 0)
 
             # Calculate average LOC per commit
@@ -2574,7 +2578,7 @@ class ReportRenderer:
 
             org_display = domain if domain and domain != "unknown" else "-"
 
-            lines.append(f"| {i} | {display_name} | {commits_1y} | {int(loc_1y):+d} | {avg_display} | {repos_1y} | {org_display} |")
+            lines.append(f"| {i} | {display_name} | {commits_1y} | {int(loc_1y):+d} | {delta_loc_1y} | {avg_display} | {repos_1y} | {org_display} |")
 
         return "\n".join(lines)
 
@@ -2587,7 +2591,7 @@ class ReportRenderer:
             lines = ["| Rank | Contributor | Commits | Repositories | Organization |",
                      "|------|-------------|---------|--------------|--------------|"]
         else:
-            lines = ["| Rank | Contributor | Net LOC | Commits | Repositories | Organization |",
+            lines = ["| Rank | Contributor | LOC | Commits | Repositories | Organization |",
                      "|------|-------------|---------|---------|--------------|--------------|"]
 
         for i, contributor in enumerate(contributors, 1):
@@ -2619,14 +2623,17 @@ class ReportRenderer:
 
         lines = ["## 🏢 Top Organizations (Last Year)",
                  "",
-                 "| Rank | Organization | Contributors | Commits | Net LOC | Avg LOC/Commit | Repositories |",
-                 "|------|--------------|--------------|---------|---------|----------------|--------------|"]
+                 "| Rank | Organization | Contributors | Commits | LOC | Δ LOC | Avg LOC/Commit | Unique Repositories |",
+                 "|------|--------------|--------------|---------|-----|-------|----------------|---------------------|"]
 
         for i, org in enumerate(top_orgs, 1):
             domain = org.get("domain", "Unknown")
             contributors = org.get("contributor_count", 0)
             commits_1y = org.get("commits", {}).get("last_365_days", 0)
             loc_1y = org.get("lines_net", {}).get("last_365_days", 0)
+            lines_added_1y = org.get("lines_added", {}).get("last_365_days", 0)
+            lines_removed_1y = org.get("lines_removed", {}).get("last_365_days", 0)
+            delta_loc_1y = abs(lines_added_1y) + abs(lines_removed_1y)
             repos_1y = org.get("repositories_count", {}).get("last_365_days", 0)
 
             # Calculate average LOC per commit
@@ -2636,7 +2643,7 @@ class ReportRenderer:
             else:
                 avg_display = "-"
 
-            lines.append(f"| {i} | {domain} | {contributors} | {commits_1y} | {int(loc_1y):+d} | {avg_display} | {repos_1y} |")
+            lines.append(f"| {i} | {domain} | {contributors} | {commits_1y} | {int(loc_1y):+d} | {delta_loc_1y} | {avg_display} | {repos_1y} |")
 
         return "\n".join(lines)
 
