@@ -124,7 +124,8 @@ jobs:
           path-prefix: "./${{ matrix.gerrit }}"
           skip-archived: "true"
           # LF Broadband struggles with load and operations can timeout
-          threads: ${{ matrix.project == 'LF Broadband' && '1' || '4' }}
+          # threads: ${{ matrix.project == 'LF Broadband' && '1' || '4' }}
+          threads: "4"
           clone-timeout: "600"
           retry-attempts: "5"
           retry-base-delay: "3.0"
@@ -237,6 +238,139 @@ jobs:
           path: ./reports/${{ matrix.project }}/
           retention-days: 30
           if-no-files-found: error
+
+      - name: "Publish report to gerrit-reports repository"
+        if: success()
+        env:
+          REPORTS_TOKEN: ${{ secrets.GERRIT_REPORTS_PAT_TOKEN }}
+          REPORTS_REPO: modeseven-lfit/gerrit-reports
+          PROJECT_NAME: ${{ matrix.project }}
+          PR_MODE: ${{ vars.REPORTS_PR_MODE || 'false' }}
+        shell: bash
+        # yamllint disable rule:line-length
+        run: |
+          set -euo pipefail
+
+          if [ -z "${REPORTS_TOKEN}" ]; then
+            echo "::error::GERRIT_REPORTS_PAT_TOKEN secret not set; cannot publish report."
+            exit 1
+          fi
+
+          report_src="./reports/${PROJECT_NAME}/report.html"
+          if [ ! -f "${report_src}" ]; then
+            echo "::warning::No report.html found at ${report_src}; skipping publish."
+            exit 0
+          fi
+
+          slug=$(echo "${PROJECT_NAME}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')
+          echo "Resolved project slug: ${slug}"
+
+          workdir="$(mktemp -d)"
+          cd "${workdir}"
+
+          echo "Cloning target repository"
+          git clone --depth 1 "https://${REPORTS_TOKEN}@github.com/${REPORTS_REPO}.git" repo
+          cd repo
+
+          target_dir="projects/${slug}"
+          mkdir -p "${target_dir}"
+          cp "${GITHUB_WORKSPACE}/${report_src}" "${target_dir}/report.html"
+
+          cat > "${target_dir}/.provenance.json" <<EOF
+          {
+            "project": "${PROJECT_NAME}",
+            "slug": "${slug}",
+            "source_run_id": "${GITHUB_RUN_ID}",
+            "source_run_attempt": "${GITHUB_RUN_ATTEMPT}",
+            "source_repo": "${GITHUB_REPOSITORY}",
+            "generated_at_utc": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          }
+          EOF
+
+          git config user.name "lf-releng-reports-bot"
+          git config user.email "lf-releng+reports-bot@linuxfoundation.org"
+
+          git add "${target_dir}/report.html" "${target_dir}/.provenance.json" || true
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit for ${PROJECT_NAME}; skipping."
+            exit 0
+          fi
+
+          commit_msg="chore: update report for ${PROJECT_NAME} (run ${GITHUB_RUN_ID})"
+          echo "Committing: ${commit_msg}"
+          git commit -m "${commit_msg}"
+
+          if [ "${PR_MODE}" = "true" ]; then
+            echo "PR_MODE enabled; creating branch and pull request."
+            branch="update/${slug}/$(date -u +%Y%m%d%H%M%S)"
+            git checkout -b "${branch}"
+            git push origin "${branch}"
+
+            create_resp=$(curl -sS -X POST \
+              -H "Authorization: Bearer ${REPORTS_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${REPORTS_REPO}/pulls" \
+              -d @- <<PRJSON
+          {
+            "title": "chore: update report for ${PROJECT_NAME}",
+            "head": "${branch}",
+            "base": "main",
+            "body": "Automated update of report for ${PROJECT_NAME} from run ${GITHUB_RUN_ID}.",
+            "maintainer_can_modify": true,
+            "draft": false
+          }
+          PRJSON
+            )
+
+            pr_number=$(echo "${create_resp}" | jq -r '.number // empty')
+
+            if [ -z "${pr_number}" ]; then
+              echo "::error::Failed to create pull request. Response:"
+              echo "${create_resp}"
+              exit 1
+            fi
+            echo "Created PR #${pr_number}"
+
+            merge_resp=$(curl -sS -X PUT \
+              -H "Authorization: Bearer ${REPORTS_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${REPORTS_REPO}/pulls/${pr_number}/merge" \
+              -d '{"merge_method":"squash"}' || true)
+
+            merged=$(echo "${merge_resp}" | jq -r '.merged // false')
+            if [ "${merged}" = "true" ]; then
+              echo "Pull request #${pr_number} merged automatically."
+            else
+              echo "Pull request #${pr_number} not auto-merged (may require review or settings block)."
+            fi
+            exit 0
+          fi
+
+          echo "Direct push mode enabled; pushing to main with rebase/retry logic."
+          for attempt in {1..5}; do
+            set +e
+            git pull --rebase origin main
+            rc=$?
+            set -e
+            if [ $rc -ne 0 ]; then
+              echo "Rebase attempt ${attempt} failed; retrying..."
+              sleep $((attempt * 2))
+              continue
+            fi
+
+            if git push origin HEAD:main; then
+              echo "Report published successfully on attempt ${attempt}."
+              exit 0
+            else
+              echo "Push attempt ${attempt} failed; retrying..."
+              sleep $((attempt * 2))
+            fi
+          done
+
+          echo "::error::Failed to push report after multiple attempts."
+          exit 1
+        # yamllint enable rule:line-length
 
   summary:
     name: "Generate Summary Report"

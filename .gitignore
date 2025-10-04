@@ -1,6 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: 2025 The Linux Foundation
 
+testing/ONAP
+testing/reports
+testing/gerrit-clone.log
+
 # Gerrit server directories (server-specific naming)
 gerrit.*/
 gerrit-repos*/

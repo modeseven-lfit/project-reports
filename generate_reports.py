@@ -2860,11 +2860,12 @@ class ReportRenderer:
         .feature-matrix-table th:nth-child(6) {{ width: 12%; }} /* .gitreview */
         .feature-matrix-table th:nth-child(7) {{ width: 10%; }} /* Status */
 
+        /* CI/CD Jobs table - handles both 4 and 5 column layouts */
         .cicd-jobs-table th:nth-child(1) {{ width: 20%; }} /* Gerrit Project */
-        .cicd-jobs-table th:nth-child(2) {{ width: 24%; }} /* GitHub Workflows */
-        .cicd-jobs-table th:nth-child(3) {{ width: 12%; }} /* Workflows */
-        .cicd-jobs-table th:nth-child(4) {{ width: 32%; }} /* Jenkins Jobs */
-        .cicd-jobs-table th:nth-child(5) {{ width: 12%; }} /* Jobs */
+        .cicd-jobs-table th:nth-child(2) {{ width: 30%; }} /* GitHub Workflows */
+        .cicd-jobs-table th:nth-child(3) {{ width: 15%; }} /* Workflow Count */
+        .cicd-jobs-table th:nth-child(4) {{ width: 35%; }} /* Job Count (4-col) or Jenkins Jobs (5-col) */
+        .cicd-jobs-table th:nth-child(5) {{ width: 15%; }} /* Job Count (5-col only) */
     </style>
 </head>
 <body>
