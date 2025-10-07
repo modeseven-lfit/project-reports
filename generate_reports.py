@@ -594,6 +594,141 @@ class JenkinsAPIClient:
             return {}
 
 
+class GitHubAPIClient:
+    """Client for interacting with GitHub API to fetch workflow run status."""
+
+    def __init__(self, token: str, timeout: float = 30.0):
+        """Initialize GitHub API client with token."""
+        self.token = token
+        self.base_url = "https://api.github.com"
+        self.client = httpx.Client(
+            base_url=self.base_url,
+            timeout=httpx.Timeout(timeout, connect=10.0),
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+                "User-Agent": "repository-reports/1.0.0"
+            }
+        )
+        self.logger = logging.getLogger(__name__)
+
+    def get_repository_workflows(self, owner: str, repo: str) -> list[dict[str, Any]]:
+        """Get all workflows for a repository."""
+        try:
+            url = f"/repos/{owner}/{repo}/actions/workflows"
+            response = self.client.get(url)
+
+            if response.status_code == 200:
+                data = response.json()
+                workflows = []
+
+                for workflow in data.get("workflows", []):
+                    workflows.append({
+                        "id": workflow.get("id"),
+                        "name": workflow.get("name"),
+                        "path": workflow.get("path"),
+                        "state": workflow.get("state"),  # "active" or "disabled"
+                        "badge_url": workflow.get("badge_url"),
+                        "html_url": workflow.get("html_url")
+                    })
+
+                return workflows
+
+            elif response.status_code == 404:
+                self.logger.debug(f"Repository {owner}/{repo} not found or no access")
+                return []
+            else:
+                self.logger.warning(f"GitHub API returned {response.status_code} for workflows in {owner}/{repo}")
+                return []
+
+        except Exception as e:
+            self.logger.error(f"Error fetching workflows for {owner}/{repo}: {e}")
+            return []
+
+    def get_workflow_runs_status(self, owner: str, repo: str, workflow_id: int, limit: int = 10) -> dict[str, Any]:
+        """Get recent workflow runs for a specific workflow to determine status."""
+        try:
+            url = f"/repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs"
+            params = {"per_page": limit, "page": 1}
+
+            response = self.client.get(url, params=params)
+
+            if response.status_code == 200:
+                data = response.json()
+                runs = data.get("workflow_runs", [])
+
+                if not runs:
+                    return {"status": "no_runs", "last_run": None}
+
+                # Get the most recent run
+                latest_run = runs[0]
+
+                return {
+                    "status": latest_run.get("conclusion", "unknown"),
+                    "run_status": latest_run.get("status", "unknown"),
+                    "last_run": {
+                        "id": latest_run.get("id"),
+                        "number": latest_run.get("run_number"),
+                        "created_at": latest_run.get("created_at"),
+                        "updated_at": latest_run.get("updated_at"),
+                        "html_url": latest_run.get("html_url"),
+                        "head_branch": latest_run.get("head_branch"),
+                        "head_sha": latest_run.get("head_sha")[:7] if latest_run.get("head_sha") else None
+                    }
+                }
+            else:
+                self.logger.warning(f"GitHub API returned {response.status_code} for workflow {workflow_id} runs")
+                return {"status": "api_error", "last_run": None}
+
+        except Exception as e:
+            self.logger.error(f"Error fetching workflow runs for {owner}/{repo}/workflows/{workflow_id}: {e}")
+            return {"status": "error", "last_run": None}
+
+    def get_repository_workflow_status_summary(self, owner: str, repo: str) -> dict[str, Any]:
+        """Get comprehensive workflow status summary for a repository."""
+        workflows = self.get_repository_workflows(owner, repo)
+
+        if not workflows:
+            return {
+                "has_workflows": False,
+                "workflows": [],
+                "overall_status": "no_workflows"
+            }
+
+        workflow_statuses = []
+        active_workflows = [w for w in workflows if w.get("state") == "active"]
+
+        for workflow in active_workflows:
+            workflow_id = workflow.get("id")
+            if workflow_id:
+                status_info = self.get_workflow_runs_status(owner, repo, workflow_id)
+                workflow_statuses.append({
+                    **workflow,
+                    **status_info
+                })
+
+        # Determine overall status
+        if not workflow_statuses:
+            overall_status = "no_active_workflows"
+        else:
+            latest_statuses = [w.get("status") for w in workflow_statuses]
+            if any(status == "failure" for status in latest_statuses):
+                overall_status = "has_failures"
+            elif any(status == "success" for status in latest_statuses):
+                overall_status = "has_successes"
+            else:
+                overall_status = "unknown"
+
+        return {
+            "has_workflows": True,
+            "total_workflows": len(workflows),
+            "active_workflows": len(active_workflows),
+            "workflows": workflow_statuses,
+            "overall_status": overall_status
+        }
+
+
 # =============================================================================
 # GIT DATA COLLECTION (Phase 2 - TODO)
 # =============================================================================
@@ -1284,6 +1419,7 @@ class FeatureRegistry:
         """Register all default feature detection checks."""
         self.register("dependabot", self._check_dependabot)
         self.register("github2gerrit_workflow", self._check_github2gerrit_workflow)
+        self.register("g2g", self._check_g2g)
         self.register("pre_commit", self._check_pre_commit)
         self.register("readthedocs", self._check_readthedocs)
         self.register("sonatype_config", self._check_sonatype_config)
@@ -1376,6 +1512,26 @@ class FeatureRegistry:
         return {
             "present": len(matching_workflows) > 0,
             "workflows": matching_workflows
+        }
+
+    def _check_g2g(self, repo_path: Path) -> dict[str, Any]:
+        """Check for specific GitHub to Gerrit workflow files."""
+        workflows_dir = repo_path / ".github" / "workflows"
+        g2g_files = [
+            "github2gerrit.yaml",
+            "call-github2gerrit.yaml"
+        ]
+
+        found_files = []
+        for filename in g2g_files:
+            file_path = workflows_dir / filename
+            if file_path.exists():
+                found_files.append(f".github/workflows/{filename}")
+
+        return {
+            "present": len(found_files) > 0,
+            "file_paths": found_files,
+            "file_path": found_files[0] if found_files else None  # Keep for backward compatibility
         }
 
     def _check_pre_commit(self, repo_path: Path) -> dict[str, Any]:
@@ -1627,7 +1783,7 @@ class FeatureRegistry:
         return indicators
 
     def _check_workflows(self, repo_path: Path) -> dict[str, Any]:
-        """Analyze GitHub workflows."""
+        """Analyze GitHub workflows with optional GitHub API integration."""
         workflows_dir = repo_path / ".github" / "workflows"
         if not workflows_dir.exists():
             return {"count": 0, "classified": {"verify": 0, "merge": 0, "other": 0}, "files": []}
@@ -1659,12 +1815,34 @@ class FeatureRegistry:
         # Extract just the workflow names for telemetry
         workflow_names = [workflow_info["name"] for workflow_info in workflow_files]
 
-        return {
+        # Base result with static analysis
+        result = {
             "count": len(workflow_files),
             "classified": classified,
             "files": workflow_files,
-            "workflow_names": workflow_names
+            "workflow_names": workflow_names,
+            "has_runtime_status": False
         }
+
+        # Try GitHub API integration if enabled and token available
+        github_api_enabled = self.config.get("extensions", {}).get("github_api", {}).get("enabled", False)
+        github_token = self.config.get("extensions", {}).get("github_api", {}).get("token") or os.environ.get("GITHUB_TOKEN")
+
+        if github_api_enabled and github_token and self._is_github_repository(repo_path):
+            try:
+                owner, repo_name = self._extract_github_repo_info(repo_path)
+                if owner and repo_name:
+                    github_client = GitHubAPIClient(github_token)
+                    github_status = github_client.get_repository_workflow_status_summary(owner, repo_name)
+
+                    # Merge GitHub API data with static analysis
+                    result["github_api_data"] = github_status
+                    result["has_runtime_status"] = True
+                    self.logger.debug(f"Retrieved GitHub workflow status for {owner}/{repo_name}")
+            except Exception as e:
+                self.logger.warning(f"Failed to fetch GitHub workflow status for {repo_path}: {e}")
+
+        return result
 
     def _analyze_workflow_file(self, workflow_file: Path, verify_patterns: list[str], merge_patterns: list[str]) -> dict[str, Any]:
         """Analyze a single workflow file for classification."""
@@ -1740,6 +1918,89 @@ class FeatureRegistry:
             pass
 
         return workflow_info
+
+    def _is_github_repository(self, repo_path: Path) -> bool:
+        """Check if repository is hosted on GitHub by examining git remotes."""
+        try:
+            # Check for git directory
+            git_dir = repo_path / ".git"
+            if not git_dir.exists():
+                return False
+
+            # Read git config or remote files
+            config_file = git_dir / "config"
+            if config_file.exists():
+                with open(config_file, 'r') as f:
+                    content = f.read()
+                    # Check for GitHub remotes
+                    if "github.com" in content.lower():
+                        return True
+
+            # For ONAP and other projects that are mirrored on GitHub,
+            # check if they have GitHub workflows (indicates GitHub presence)
+            workflows_dir = repo_path / ".github" / "workflows"
+            if workflows_dir.exists() and any(workflows_dir.iterdir()):
+                # If we have GitHub workflows, assume it's mirrored on GitHub
+                return True
+
+            return False
+        except Exception:
+            return False
+
+    def _extract_github_repo_info(self, repo_path: Path) -> tuple[str, str]:
+        """Extract GitHub owner and repo name from git remote."""
+        try:
+            git_dir = repo_path / ".git"
+            config_file = git_dir / "config"
+
+            if not config_file.exists():
+                # For ONAP repos, try to infer from path structure
+                return self._infer_github_info_from_path(repo_path)
+
+            with open(config_file, 'r') as f:
+                content = f.read()
+
+            # Look for GitHub remote URLs
+            import re
+            # Match both HTTPS and SSH formats
+            patterns = [
+                r'url = https://github\.com/([^/]+)/([^/\s]+)(?:\.git)?',
+                r'url = git@github\.com:([^/]+)/([^/\s]+)(?:\.git)?'
+            ]
+
+            for pattern in patterns:
+                match = re.search(pattern, content)
+                if match:
+                    owner, repo = match.groups()
+                    # Clean up repo name
+                    repo = repo.rstrip('.git')
+                    return owner, repo
+
+            # Fallback to path-based inference for mirrored repos
+            return self._infer_github_info_from_path(repo_path)
+        except Exception:
+            return "", ""
+
+    def _infer_github_info_from_path(self, repo_path: Path) -> tuple[str, str]:
+        """Infer GitHub owner/repo from repository path for mirrored repos like ONAP."""
+        try:
+            # For ONAP repos: /path/to/ONAP/project/subproject -> onap/project-subproject
+            path_parts = repo_path.parts
+
+            # Look for ONAP in the path
+            if "ONAP" in path_parts:
+                onap_index = path_parts.index("ONAP")
+                if onap_index < len(path_parts) - 1:
+                    # Get the project path after ONAP
+                    project_parts = path_parts[onap_index + 1:]
+                    if project_parts:
+                        # Convert path like "aai/babel" to "onap/aai-babel"
+                        repo_name = "-".join(project_parts)
+                        return "onap", repo_name
+
+            return "", ""
+        except Exception:
+            return "", ""
 
     def _check_gitreview(self, repo_path: Path) -> dict[str, Any]:
         """Check for .gitreview configuration file."""
@@ -2376,6 +2637,42 @@ class ReportRenderer:
 
         return "\n".join(lines)
 
+    def _match_workflow_file_to_github_name(self, github_name: str, file_names: list[str]) -> str:
+        """
+        Match GitHub workflow name to workflow file name.
+
+        Args:
+            github_name: Name from GitHub API
+            file_names: List of workflow file names
+
+        Returns:
+            Matching file name or empty string if no match
+        """
+        # Direct match
+        if github_name in file_names:
+            return github_name
+
+        # Try matching without extension
+        github_base = github_name.lower().replace(' ', '-').replace('_', '-')
+
+        for file_name in file_names:
+            file_base = file_name.lower()
+            # Remove .yml/.yaml extension
+            if file_base.endswith('.yml'):
+                file_base = file_base[:-4]
+            elif file_base.endswith('.yaml'):
+                file_base = file_base[:-5]
+
+            # Try various matching strategies
+            if (file_base == github_base or
+                github_base in file_base or
+                file_base in github_base or
+                file_base.replace('-', '') == github_base.replace('-', '')):
+                return file_name
+
+        # If no match found, return the first file name as fallback
+        return file_names[0] if file_names else ""
+
     def _generate_all_repositories_section(self, data: dict[str, Any]) -> str:
         """Generate combined repositories table showing all Gerrit projects."""
         all_repos = data.get("summaries", {}).get("all_repositories", [])
@@ -2444,8 +2741,117 @@ class ReportRenderer:
         lines.extend(["", f"**Total:** {len(no_commit_repos)} Gerrit projects with no apparent commits"])
         return "\n".join(lines)
 
+    def _determine_jenkins_job_status(self, job_data: dict[str, Any]) -> str:
+        """
+        Determine Jenkins job status for color coding.
+
+        Args:
+            job_data: Jenkins job data containing color and last_build info
+
+        Returns:
+            Status string: "success", "failure", "unstable", "building", "disabled", "unknown"
+        """
+        # Jenkins color codes mapping
+        color = job_data.get("color", "").lower()
+        last_build = job_data.get("last_build", {})
+        last_result = (last_build.get("result") or "").upper()
+
+        # Handle animated colors (building)
+        if color.endswith("_anime"):
+            return "building"
+
+        # Map Jenkins colors to status
+        color_map = {
+            "blue": "success",
+            "green": "success",
+            "red": "failure",
+            "yellow": "unstable",
+            "grey": "disabled",
+            "disabled": "disabled",
+            "aborted": "aborted"
+        }
+
+        # Try color first
+        if color in color_map:
+            return color_map[color]
+
+        # Fallback to last build result
+        result_map = {
+            "SUCCESS": "success",
+            "FAILURE": "failure",
+            "UNSTABLE": "unstable",
+            "ABORTED": "aborted"
+        }
+
+        if last_result in result_map:
+            return result_map[last_result]
+
+        return "unknown"
+
+    def _determine_github_workflow_status(self, workflow_data: dict[str, Any]) -> str:
+        """
+        Determine GitHub workflow status for color coding.
+
+        Args:
+            workflow_data: Workflow data from GitHub API
+
+        Returns:
+            Status string: "success", "failure", "in_progress", "no_runs", "unknown"
+        """
+        status = workflow_data.get("status", "unknown")
+        run_status = workflow_data.get("run_status", "unknown")
+
+        # Handle in-progress workflows
+        if run_status in ["in_progress", "queued", "pending"]:
+            return "in_progress"
+
+        # Map GitHub workflow conclusions to our status
+        status_map = {
+            "success": "success",
+            "failure": "failure",
+            "cancelled": "cancelled",
+            "skipped": "skipped",
+            "timed_out": "failure",
+            "action_required": "failure",
+            "neutral": "neutral",
+            "no_runs": "no_runs"
+        }
+
+        return status_map.get(status, "unknown")
+
+    def _apply_status_color_classes(self, item_name: str, status: str, item_type: str = "workflow") -> str:
+        """
+        Apply CSS classes for status color coding.
+
+        Args:
+            item_name: Name of the job/workflow
+            status: Status string from determine_*_status functions
+            item_type: "workflow" or "jenkins" for different styling if needed
+
+        Returns:
+            HTML string with appropriate CSS classes
+        """
+        # CSS class mapping for different statuses
+        class_map = {
+            "success": "status-success",
+            "failure": "status-failure",
+            "unstable": "status-warning",
+            "building": "status-building",
+            "in_progress": "status-in-progress",
+            "disabled": "status-disabled",
+            "aborted": "status-cancelled",
+            "cancelled": "status-cancelled",
+            "neutral": "status-neutral",
+            "skipped": "status-skipped",
+            "no_runs": "status-no-runs",
+            "unknown": "status-unknown"
+        }
+
+        css_class = class_map.get(status, "status-unknown")
+        return f'<span class="{css_class} {item_type}-status">{item_name}</span>'
+
     def _generate_deployed_workflows_section(self, data: dict[str, Any]) -> str:
-        """Generate deployed CI/CD jobs telemetry section."""
+        """Generate deployed CI/CD jobs telemetry section with status color-coding."""
         repositories = data.get("repositories", [])
 
         if not repositories:
@@ -2464,6 +2870,7 @@ class ReportRenderer:
                 repos_with_cicd.append({
                     "gerrit_project": repo.get("gerrit_project", "Unknown"),
                     "workflow_names": workflow_names,
+                    "jenkins_jobs": jenkins_jobs,  # Store full job data for status
                     "jenkins_job_names": jenkins_job_names,
                     "workflow_count": len(workflow_names),
                     "job_count": len(jenkins_job_names)
@@ -2488,12 +2895,53 @@ class ReportRenderer:
 
         for repo in sorted(repos_with_cicd, key=lambda x: x["gerrit_project"]):
             name = repo["gerrit_project"]
-            workflow_names_str = "<br>".join(sorted(repo["workflow_names"])) if repo["workflow_names"] else ""
+
+            # Build workflow names with color coding
+            workflow_items = []
+            workflows_data = repo.get("features", {}).get("workflows", {})
+
+            if workflows_data.get("has_runtime_status", False):
+                # Use GitHub API data for status-aware rendering
+                github_workflows = workflows_data.get("github_api_data", {}).get("workflows", [])
+
+                # Create a map of workflow names to their status
+                workflow_status_map = {}
+                for workflow in github_workflows:
+                    workflow_name = workflow.get("name", "Unknown")
+                    # Try to match workflow file names to GitHub workflow names
+                    matching_file_name = self._match_workflow_file_to_github_name(
+                        workflow_name, repo["workflow_names"]
+                    )
+                    if matching_file_name:
+                        status = self._determine_github_workflow_status(workflow)
+                        workflow_status_map[matching_file_name] = status
+
+                # Build the list with status information
+                for workflow_name in sorted(repo["workflow_names"]):
+                    status = workflow_status_map.get(workflow_name, "unknown")
+                    colored_name = self._apply_status_color_classes(workflow_name, status, "workflow")
+                    workflow_items.append(colored_name)
+            else:
+                # Fallback to static names without status
+                for workflow_name in sorted(repo["workflow_names"]):
+                    colored_name = self._apply_status_color_classes(workflow_name, "unknown", "workflow")
+                    workflow_items.append(colored_name)
+
+            workflow_names_str = "<br>".join(workflow_items) if workflow_items else ""
+
+            # Build Jenkins job names with color coding based on status
+            jenkins_items = []
+            for job in repo["jenkins_jobs"]:
+                job_name = job.get("name", "Unknown")
+                status = self._determine_jenkins_job_status(job)
+                colored_name = self._apply_status_color_classes(job_name, status, "jenkins")
+                jenkins_items.append(colored_name)
+            jenkins_names_str = "<br>".join(jenkins_items) if jenkins_items else ""
+
             workflow_count = repo["workflow_count"]
             job_count = repo["job_count"]
 
             if has_any_jenkins:
-                jenkins_names_str = "<br>".join(sorted(repo["jenkins_job_names"])) if repo["jenkins_job_names"] else ""
                 lines.append(f"| {name} | {workflow_names_str} | {workflow_count} | {jenkins_names_str} | {job_count} |")
             else:
                 lines.append(f"| {name} | {workflow_names_str} | {workflow_count} | {job_count} |")
@@ -2666,8 +3114,8 @@ class ReportRenderer:
                  "",
                  f"Feature analysis for all Gerrit projects. Status: ✅ Current ☑️ Active 🛑 Inactive",
                  "",
-                 "| Gerrit Project | Type | Dependabot | Pre-commit | ReadTheDocs | .gitreview | Status |",
-                 "|------------|------|------------|------------|-------------|------------|--------|"]
+                 "| Gerrit Project | Type | Dependabot | Pre-commit | ReadTheDocs | .gitreview | G2G | Status |",
+                 "|------------|------|------------|------------|-------------|------------|-----|--------|"]
 
         for repo in sorted_repos:
             name = repo.get("gerrit_project", "Unknown")
@@ -2682,6 +3130,7 @@ class ReportRenderer:
             pre_commit = "✅" if features.get("pre_commit", {}).get("present", False) else "❌"
             readthedocs = "✅" if features.get("readthedocs", {}).get("present", False) else "❌"
             gitreview = "✅" if features.get("gitreview", {}).get("present", False) else "❌"
+            g2g = "✅" if features.get("g2g", {}).get("present", False) else "❌"
 
             # Map activity status to display format (emoji only)
             status_map = {
@@ -2691,7 +3140,7 @@ class ReportRenderer:
             }
             status = status_map.get(activity_status, "🛑")
 
-            lines.append(f"| {name} | {primary_type} | {dependabot} | {pre_commit} | {readthedocs} | {gitreview} | {status} |")
+            lines.append(f"| {name} | {primary_type} | {dependabot} | {pre_commit} | {readthedocs} | {gitreview} | {g2g} | {status} |")
 
         return "\n".join(lines)
 
@@ -2797,6 +3246,68 @@ class ReportRenderer:
             padding-top: 2em;
             border-top: 1px solid #ecf0f1;
             color: #7f8c8d;
+        }}
+
+        /* CI/CD Job Status Styling */
+        .status-success {{
+            color: #28a745;
+            font-weight: 500;
+        }}
+
+        .status-failure {{
+            color: #dc3545;
+            font-weight: 500;
+        }}
+
+        .status-warning {{
+            color: #ffc107;
+            font-weight: 500;
+        }}
+
+        .status-building {{
+            color: #007bff;
+            font-weight: 500;
+        }}
+
+        .status-disabled {{
+            color: #6c757d;
+            font-style: italic;
+        }}
+
+        .status-cancelled {{
+            color: #fd7e14;
+            font-weight: 500;
+        }}
+
+        .status-unknown {{
+            color: #6c757d;
+        }}
+
+        .status-in-progress {{
+            color: #007bff;
+            font-weight: 500;
+        }}
+
+        .status-neutral {{
+            color: #6c757d;
+            font-weight: 500;
+        }}
+
+        .status-skipped {{
+            color: #6c757d;
+            font-style: italic;
+        }}
+
+        .status-no-runs {{
+            color: #6c757d;
+            font-style: italic;
+        }}
+
+        /* Hover effects for better UX */
+        .workflow-status:hover, .jenkins-status:hover {{
+            text-decoration: underline;
+            cursor: default;
+        }}
         }}
 
         /* Custom styles for Simple-DataTables integration */

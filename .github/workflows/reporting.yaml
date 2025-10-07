@@ -117,7 +117,7 @@ jobs:
       - name: "Clone Gerrit repositories for ${{ matrix.project }}"
         # Temporarily use fork until merged upstream
         # yamllint disable-line rule:line-length
-        uses: modeseven-lfreleng-actions/gerrit-clone-action@main # latest
+        uses: lfreleng-actions/gerrit-clone-action@108afd706982d4fd54a43051a8ae981d61a51083 # v0.1.7
         id: clone
         with:
           host: ${{ matrix.gerrit }}
@@ -164,6 +164,7 @@ jobs:
         shell: bash
         env:
           JENKINS_HOST: ${{ matrix.jenkins }}
+          GITHUB_TOKEN: ${{ secrets.GERRIT_REPORTS_PAT_TOKEN }}
         run: |
           project="${{ matrix.project }}"
           echo "📊 Starting comprehensive analytics for $project"
@@ -173,6 +174,13 @@ jobs:
             echo "🔧 Jenkins integration enabled for: $JENKINS_HOST"
           else
             echo "ℹ️ No Jenkins host provided - Jenkins integration disabled"
+          fi
+
+          # Debug: Show GitHub token availability
+          if [ -n "$GITHUB_TOKEN" ]; then
+            echo "🔧 GitHub API integration enabled"
+          else
+            echo "ℹ️ No GitHub token provided - GitHub API integration disabled"
           fi
 
           # Execute the comprehensive reporting system
