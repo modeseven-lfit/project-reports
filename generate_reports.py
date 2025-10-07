@@ -2615,8 +2615,6 @@ class ReportRenderer:
         return f"""# 📊 Gerrit Project Analysis Report: {project}
 
 **Generated:** {formatted_time}
-**Gerrit Projects Analyzed:** {total_repos} ({current_repos} current, {active_repos} active)
-**Contributors Found:** {total_authors:,}
 **Schema Version:** {data.get("schema_version", "1.0.0")}"""
 
     def _generate_summary_section(self, data: dict[str, Any]) -> str:
@@ -2741,9 +2739,6 @@ class ReportRenderer:
         active_threshold = self.config.get("activity_thresholds", {}).get("active_days", 1095)
 
         lines = ["## 📊 Gerrit Projects",
-                 "",
-                 f"Complete list of all Gerrit repositories sorted by activity (commits in last year). Use column sorting to filter by different criteria.",
-                 f"**Activity Status:** ✅ Current ☑️ Active 🛑 Inactive",
                  "",
                  "| Gerrit Project | Commits | LOC | Contributors | Days Inactive | Last Commit Date | Status |",
                  "|----------------|---------|---------|--------------|---------------|------------------|--------|"]
@@ -2944,14 +2939,24 @@ class ReportRenderer:
         if not repos_with_cicd:
             return "## 🏁 Deployed CI/CD Jobs\n\nNo CI/CD jobs detected in any repositories."
 
+        # Calculate totals
+        total_workflows = sum(repo["workflow_count"] for repo in repos_with_cicd)
+        total_jenkins_jobs = sum(repo["job_count"] for repo in repos_with_cicd)
+
         # Build table header based on whether Jenkins jobs exist
         if has_any_jenkins:
             lines = ["## 🏁 Deployed CI/CD Jobs",
+                     "",
+                     f"**Total GitHub workflows:** {total_workflows}",
+                     f"**Total Jenkins jobs:** {total_jenkins_jobs}",
                      "",
                      "| Gerrit Project | GitHub Workflows | Workflow Count | Jenkins Jobs | Job Count |",
                      "|----------------|-------------------|----------------|--------------|-----------|"]
         else:
             lines = ["## 🏁 Deployed CI/CD Jobs",
+                     "",
+                     f"**Total GitHub workflows:** {total_workflows}",
+                     f"**Total Jenkins jobs:** {total_jenkins_jobs}",
                      "",
                      "| Gerrit Project | GitHub Workflows | Workflow Count | Job Count |",
                      "|----------------|-------------------|----------------|-----------|"]
@@ -3016,8 +3021,10 @@ class ReportRenderer:
         """Generate consolidated contributors table section."""
         top_commits = data.get("summaries", {}).get("top_contributors_commits", [])
         top_loc = data.get("summaries", {}).get("top_contributors_loc", [])
+        total_authors = data.get("summaries", {}).get("counts", {}).get("total_authors", 0)
 
         sections = ["## 👥 Top Contributors (Last Year)"]
+        sections.append(f"**Contributors Found:** {total_authors:,}")
 
         # Generate consolidated table with all contributors
         if top_commits or top_loc:
@@ -3177,8 +3184,6 @@ class ReportRenderer:
         active_threshold = self.config.get("activity_thresholds", {}).get("active_days", 1095)
 
         lines = ["## 🔧 Gerrit Project Feature Matrix",
-                 "",
-                 f"Feature analysis for all Gerrit projects. Status: ✅ Current ☑️ Active 🛑 Inactive",
                  "",
                  "| Gerrit Project | Type | Dependabot | Pre-commit | ReadTheDocs | .gitreview | G2G | Status |",
                  "|------------|------|------------|------------|-------------|------------|-----|--------|"]
