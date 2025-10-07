@@ -1089,6 +1089,64 @@ class GitDataCollector:
 
         return matching_windows
 
+    def extract_organizational_domain(self, full_domain: str) -> str:
+        """
+        Extract organizational domain from full domain by taking the last two parts.
+        Uses configuration file for exceptions where full domain should be preserved.
+
+        Examples:
+        - users.noreply.github.com -> github.com
+        - tnap-dev-vm-mangala.tnaplab.telekom.de -> telekom.de
+        - contractor.linuxfoundation.org -> linuxfoundation.org
+        - zte.com.cn -> zte.com.cn (preserved due to configuration)
+        - simple.com -> simple.com (unchanged for 2-part domains)
+        - localhost -> localhost (unchanged for single-part domains)
+        """
+        if not full_domain or full_domain in ["unknown", "localhost", ""]:
+            return full_domain
+
+        # Load domain configuration (with caching)
+        if not hasattr(self, '_domain_config'):
+            self._domain_config = self._load_domain_config()
+
+        # Check if domain should be preserved in full
+        if full_domain in self._domain_config.get('preserve_full_domain', []):
+            return full_domain
+
+        # Check for custom mappings
+        custom_mappings = self._domain_config.get('custom_mappings', {})
+        if full_domain in custom_mappings:
+            return custom_mappings[full_domain]
+
+        # Split domain into parts
+        parts = full_domain.split('.')
+
+        # If 2 or fewer parts, return as-is
+        if len(parts) <= 2:
+            return full_domain
+
+        # Return last two parts
+        return '.'.join(parts[-2:])
+
+    def _load_domain_config(self) -> dict:
+        """Load organizational domain configuration from YAML file."""
+        import os
+        import yaml
+
+        config_path = os.path.join(os.path.dirname(__file__), 'configuration', 'organizational_domains.yaml')
+
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                config = yaml.safe_load(f) or {}
+                self.logger.debug(f"Loaded organizational domain config from {config_path}")
+                return config
+        except FileNotFoundError:
+            self.logger.warning(f"Organizational domain config file not found: {config_path}")
+            return {}
+        except Exception as e:
+            self.logger.error(f"Error loading organizational domain config: {e}")
+            return {}
+
     def normalize_author_identity(self, name: str, email: str) -> tuple[str, str]:
         """
         Normalize author identity with consistent format.
@@ -1212,7 +1270,7 @@ class GitDataCollector:
             "name": norm_name,
             "email": norm_email,
             "username": norm_name.split()[0] if norm_name else "",
-            "domain": norm_email.split("@")[-1] if "@" in norm_email else ""
+            "domain": self.extract_organizational_domain(norm_email.split("@")[-1]) if "@" in norm_email else ""
         }
 
         # Calculate LOC changes for this commit
@@ -2598,8 +2656,6 @@ class ReportRenderer:
 | Active Gerrit Projects | {self._format_number(active_repos)} | {active_pct:.1f}% |
 | Inactive Gerrit Projects | {self._format_number(inactive_repos)} | {inactive_pct:.1f}% |
 | No Apparent Commits | {self._format_number(no_commit_repos)} | {no_commit_pct:.1f}% |
-| Total Contributors | {self._format_number(total_authors)} | - |
-| Organizations | {self._format_number(total_orgs)} | - |
 | Total Commits | {self._format_number(total_commits)} | - |
 | Total Lines of Code | {self._format_number(total_lines_added)} | - |"""
 
@@ -3068,10 +3124,13 @@ class ReportRenderer:
         if not top_orgs:
             return "## 🏢 Organizations\n\nNo organization data available."
 
-        lines = ["## 🏢 Top Organizations (Last Year)",
-                 "",
-                 "| Rank | Organization | Contributors | Commits | LOC | Δ LOC | Avg LOC/Commit | Unique Repositories |",
-                 "|------|--------------|--------------|---------|-----|-------|----------------|---------------------|"]
+        total_orgs = data.get("summaries", {}).get("counts", {}).get("total_organizations", 0)
+
+        lines = ["## 🏢 Top Organizations (Last Year)"]
+        lines.append(f"**Organizations Found:** {total_orgs:,}")
+        lines.append("")
+        lines.append("| Rank | Organization | Contributors | Commits | LOC | Δ LOC | Avg LOC/Commit | Unique Repositories |")
+        lines.append("|------|--------------|--------------|---------|-----|-------|----------------|---------------------|")
 
         for i, org in enumerate(top_orgs, 1):
             domain = org.get("domain", "Unknown")

@@ -1,0 +1,36 @@
+---
+# Organizational Domain Configuration
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2025 The Linux Foundation
+#
+# This file defines exceptions for organizational domain extraction.
+# By default, organizations are identified by the last two parts of an email
+# domain (e.g., "users.noreply.github.com" becomes "github.com").
+#
+# Some domains require special handling where more than two parts are needed
+# to properly identify the organization.
+
+# Domains that should be preserved in their full form (no truncation to last
+# 2 parts)
+preserve_full_domain:
+  - "zte.com.cn"  # Chinese domain where all 3 parts are needed for proper ID
+
+# Custom domain mappings (optional - for future use)
+# If you need to map specific domains to different organizational names
+custom_mappings: {}
+
+# Settings
+settings:
+  # Whether to apply organizational domain extraction at all
+  enable_organizational_grouping: true
+
+  # Default behavior for unknown/unspecified domains
+  # Options: "last_two_parts", "preserve_full"
+  default_extraction_method: "last_two_parts"
+
+  # Domains to ignore completely (contributors from these domains won't be
+  # grouped)
+  ignore_domains:
+    - "unknown"
+    - "localhost"
+    - ""
