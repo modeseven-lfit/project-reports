@@ -2854,26 +2854,33 @@ class ReportRenderer:
         Returns:
             Status string: "success", "failure", "in_progress", "no_runs", "unknown"
         """
-        status = workflow_data.get("status", "unknown")
-        run_status = workflow_data.get("run_status", "unknown")
+        # Get the conclusion (final result) and run status (current state)
+        conclusion = workflow_data.get("status", "unknown")  # This is actually the conclusion
+        run_status = workflow_data.get("run_status", "unknown")  # This is the run state
 
-        # Handle in-progress workflows
+        # Handle in-progress workflows first
         if run_status in ["in_progress", "queued", "pending"]:
             return "in_progress"
 
-        # Map GitHub workflow conclusions to our status
-        status_map = {
-            "success": "success",
-            "failure": "failure",
-            "cancelled": "cancelled",
-            "skipped": "skipped",
-            "timed_out": "failure",
-            "action_required": "failure",
-            "neutral": "neutral",
-            "no_runs": "no_runs"
-        }
+        # Handle completed workflows - map conclusion to our status
+        if run_status == "completed":
+            conclusion_map = {
+                "success": "success",
+                "failure": "failure",
+                "cancelled": "cancelled",
+                "skipped": "skipped",
+                "timed_out": "failure",
+                "action_required": "failure",
+                "neutral": "neutral"
+            }
+            return conclusion_map.get(conclusion, "unknown")
 
-        return status_map.get(status, "unknown")
+        # Handle special cases
+        if conclusion == "no_runs":
+            return "no_runs"
+
+        # Default to unknown for any other cases
+        return "unknown"
 
     def _apply_status_color_classes(self, item_name: str, status: str, item_type: str = "workflow") -> str:
         """
