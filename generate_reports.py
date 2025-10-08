@@ -1897,6 +1897,22 @@ class FeatureRegistry:
                     result["github_api_data"] = github_status
                     result["has_runtime_status"] = True
                     self.logger.debug(f"Retrieved GitHub workflow status for {owner}/{repo_name}")
+
+                    # If no local workflows were found but GitHub has workflows, use GitHub as source
+                    # This handles cases where Gerrit is primary but GitHub mirror has workflows
+                    if not workflow_names and github_status.get("workflows"):
+                        github_workflow_names = []
+                        for workflow in github_status.get("workflows", []):
+                            workflow_path = workflow.get("path", "")
+                            if workflow_path:
+                                file_name = os.path.basename(workflow_path)
+                                github_workflow_names.append(file_name)
+
+                        if github_workflow_names:
+                            result["workflow_names"] = github_workflow_names
+                            result["count"] = len(github_workflow_names)
+                            self.logger.debug(f"Using GitHub API as workflow source for {owner}/{repo_name}: {github_workflow_names}")
+
             except Exception as e:
                 self.logger.warning(f"Failed to fetch GitHub workflow status for {repo_path}: {e}")
 
@@ -2928,6 +2944,7 @@ class ReportRenderer:
                 repos_with_cicd.append({
                     "gerrit_project": repo.get("gerrit_project", "Unknown"),
                     "workflow_names": workflow_names,
+                    "workflows_data": repo.get("features", {}).get("workflows", {}),  # Include workflow data for status
                     "jenkins_jobs": jenkins_jobs,  # Store full job data for status
                     "jenkins_job_names": jenkins_job_names,
                     "workflow_count": len(workflow_names),
@@ -2966,23 +2983,47 @@ class ReportRenderer:
 
             # Build workflow names with color coding
             workflow_items = []
-            workflows_data = repo.get("features", {}).get("workflows", {})
+            workflows_data = repo.get("workflows_data", {})
 
             if workflows_data.get("has_runtime_status", False):
                 # Use GitHub API data for status-aware rendering
                 github_workflows = workflows_data.get("github_api_data", {}).get("workflows", [])
 
-                # Create a map of workflow names to their status
+                # Create a map of workflow file names to their status using path field
                 workflow_status_map = {}
+                import os
+
                 for workflow in github_workflows:
-                    workflow_name = workflow.get("name", "Unknown")
-                    # Try to match workflow file names to GitHub workflow names
-                    matching_file_name = self._match_workflow_file_to_github_name(
-                        workflow_name, repo["workflow_names"]
-                    )
-                    if matching_file_name:
-                        status = self._determine_github_workflow_status(workflow)
-                        workflow_status_map[matching_file_name] = status
+                    workflow_path = workflow.get("path", "")
+                    # Extract filename from path (e.g., ".github/workflows/ci.yaml" -> "ci.yaml")
+                    if workflow_path:
+                        file_name = os.path.basename(workflow_path)
+                        if file_name in repo["workflow_names"]:
+                            status = self._determine_github_workflow_status(workflow)
+                            workflow_status_map[file_name] = status
+                            self.logger.debug(f"[workflows] Path match status mapped: path={workflow_path} file={file_name} status={status}")
+                        else:
+                            self.logger.debug(f"[workflows] Path basename '{file_name}' not in local workflow_names {repo['workflow_names']} (repo={name})")
+
+                # Fallback: attempt to map remaining workflows by GitHub display name when path-based mapping
+                # did not cover all locally discovered workflow files (common with mirrored or renamed workflows)
+                if github_workflows and len(workflow_status_map) < len(repo["workflow_names"]):
+                    remaining = set(repo["workflow_names"]) - set(workflow_status_map.keys())
+                    if remaining:
+                        self.logger.debug(f"[workflows] Attempting name-based fallback mapping; unmapped local files: {sorted(remaining)} (repo={name})")
+                        for workflow in github_workflows:
+                            gh_name = workflow.get("name")
+                            if not gh_name:
+                                continue
+                            matched_file = self._match_workflow_file_to_github_name(gh_name, repo["workflow_names"])
+                            if matched_file and matched_file not in workflow_status_map:
+                                status = self._determine_github_workflow_status(workflow)
+                                workflow_status_map[matched_file] = status
+                                self.logger.debug(f"[workflows] Fallback name match: github_name='{gh_name}' -> file='{matched_file}' status={status} (repo={name})")
+
+                # If still nothing mapped, emit a single debug to aid diagnosis
+                if github_workflows and not workflow_status_map and repo["workflow_names"]:
+                    self.logger.debug(f"[workflows] No workflow runtime statuses mapped (possible API auth/visibility issue) repo={name} github_workflows={len(github_workflows)} local_files={repo['workflow_names']}")
 
                 # Build the list with status information
                 for workflow_name in sorted(repo["workflow_names"]):
