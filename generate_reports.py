@@ -413,6 +413,8 @@ class JenkinsAPIClient:
         self.timeout = timeout
         self.base_url = f"https://{host}"
         self.api_base_path = None  # Will be discovered
+        self._jobs_cache: dict[str, Any] = {}  # Cache for all jobs data
+        self._cache_populated = False
 
         import httpx
         self.client = httpx.Client(timeout=timeout)
@@ -475,13 +477,18 @@ class JenkinsAPIClient:
 
 
     def get_all_jobs(self) -> dict[str, Any]:
-        """Get all jobs from Jenkins."""
+        """Get all jobs from Jenkins with caching."""
+        # Return cached data if available
+        if self._cache_populated and self._jobs_cache:
+            logging.debug(f"Using cached Jenkins jobs data ({len(self._jobs_cache.get('jobs', []))} jobs)")
+            return self._jobs_cache
+
         if not self.api_base_path:
             logging.error(f"No valid API base path discovered for {self.host}")
             return {}
 
         try:
-            url = f"{self.base_url}{self.api_base_path}?tree=jobs[name,url,color]"
+            url = f"{self.base_url}{self.api_base_path}?tree=jobs[name,url,color,buildable,disabled]"
             logging.info(f"Fetching Jenkins jobs from: {url}")
             response = self.client.get(url)
 
@@ -489,7 +496,11 @@ class JenkinsAPIClient:
             if response.status_code == 200:
                 data = response.json()
                 job_count = len(data.get("jobs", []))
-                logging.info(f"Found {job_count} Jenkins jobs")
+                logging.info(f"Found {job_count} Jenkins jobs (cached for reuse)")
+
+                # Cache the data
+                self._jobs_cache = data
+                self._cache_populated = True
                 return data
             else:
                 logging.warning(f"Jenkins API returned {response.status_code} for {url}")
@@ -500,8 +511,8 @@ class JenkinsAPIClient:
             logging.error(f"Exception fetching Jenkins jobs from {self.host}: {e}")
             return {}
 
-    def get_jobs_for_project(self, project_name: str) -> list[dict[str, Any]]:
-        """Get jobs related to a specific Gerrit project."""
+    def get_jobs_for_project(self, project_name: str, allocated_jobs: set[str]) -> list[dict[str, Any]]:
+        """Get jobs related to a specific Gerrit project with duplicate prevention."""
         logging.debug(f"Looking for Jenkins jobs for project: {project_name}")
         all_jobs = self.get_all_jobs()
         project_jobs: list[dict[str, Any]] = []
@@ -517,19 +528,101 @@ class JenkinsAPIClient:
         total_jobs = len(all_jobs["jobs"])
         logging.debug(f"Checking {total_jobs} total Jenkins jobs for matches")
 
+        # Collect potential matches with scoring for better matching
+        candidates: list[tuple[dict[str, Any], int]] = []
+
         for job in all_jobs["jobs"]:
             job_name = job.get("name", "")
-            if project_job_name in job_name:
-                logging.debug(f"Found matching Jenkins job: {job_name}")
-                # Get detailed job info
-                job_details = self.get_job_details(job_name)
-                if job_details:
-                    project_jobs.append(job_details)
-                else:
-                    logging.warning(f"Failed to get details for Jenkins job: {job_name}")
+
+            # Skip already allocated jobs
+            if job_name in allocated_jobs:
+                logging.debug(f"Skipping already allocated Jenkins job: {job_name}")
+                continue
+
+            # Calculate match score for better job attribution
+            score = self._calculate_job_match_score(job_name, project_name, project_job_name)
+            if score > 0:
+                candidates.append((job, score))
+
+        # Sort by score (highest first) to prioritize better matches
+        candidates.sort(key=lambda x: x[1], reverse=True)
+
+        for job, score in candidates:
+            job_name = job.get("name", "")
+            logging.debug(f"Processing Jenkins job: {job_name} (score: {score})")
+
+            # Get detailed job info
+            job_details = self.get_job_details(job_name)
+            if job_details:
+                project_jobs.append(job_details)
+                # Mark job as allocated
+                allocated_jobs.add(job_name)
+                logging.info(f"Allocated Jenkins job '{job_name}' to project '{project_name}' (score: {score})")
+            else:
+                logging.warning(f"Failed to get details for Jenkins job: {job_name}")
 
         logging.info(f"Found {len(project_jobs)} Jenkins jobs for project {project_name}")
         return project_jobs
+
+    def _calculate_job_match_score(self, job_name: str, project_name: str, project_job_name: str) -> int:
+        """
+        Calculate a match score for Jenkins job attribution using STRICT PREFIX MATCHING ONLY.
+        This prevents duplicate allocation by ensuring jobs can only match one project.
+        Higher scores indicate better matches.
+        Returns 0 for no match.
+        """
+        job_name_lower = job_name.lower()
+        project_job_name_lower = project_job_name.lower()
+        project_name_lower = project_name.lower()
+
+        # STRICT PREFIX MATCHING WITH WORD BOUNDARY ONLY
+        # Job name must either:
+        # 1. Be exactly equal to project name, OR
+        # 2. Start with project name followed by a dash (-)
+        # This prevents sdc-tosca-* from matching sdc
+
+        if job_name_lower == project_job_name_lower:
+            # Exact match - highest priority
+            pass
+        elif job_name_lower.startswith(project_job_name_lower + "-"):
+            # Prefix with dash separator - valid match
+            pass
+        else:
+            # No match - neither exact nor proper prefix
+            return 0
+
+        score = 0
+
+        # Higher score for exact match
+        if job_name_lower == project_job_name_lower:
+            score += 1000
+            return score
+
+        # High score for exact prefix match with separator (project-*)
+        if job_name_lower.startswith(project_job_name_lower + "-"):
+            score += 500
+        # Exact match gets highest score
+        else:
+            score += 100
+
+        # Bonus for longer/more specific project paths (child projects get priority)
+        path_parts = project_name.count("/") + 1
+        score += path_parts * 50
+
+        # Bonus for containing full project name components in order
+        project_parts = project_name_lower.replace("/", "-").split("-")
+        consecutive_matches = 0
+        job_parts = job_name_lower.split("-")
+
+        for i, project_part in enumerate(project_parts):
+            if i < len(job_parts) and job_parts[i] == project_part:
+                consecutive_matches += 1
+            else:
+                break
+
+        score += consecutive_matches * 25
+
+        return score
 
     def get_job_details(self, job_name: str) -> dict[str, Any]:
         """Get detailed information about a specific job."""
@@ -545,11 +638,43 @@ class JenkinsAPIClient:
                 # Get last build info
                 last_build_info = self.get_last_build_info(job_name)
 
+                # Compute Jenkins job state from disabled field first
+                disabled = job_data.get("disabled", False)
+                buildable = job_data.get("buildable", True)
+                state = self._compute_jenkins_job_state(disabled, buildable)
+
+                # Get original color from Jenkins
+                original_color = job_data.get("color", "")
+
+                # Compute standardized status from color field, considering state
+                status = self._compute_job_status_from_color(original_color)
+
+                # Override color if job is disabled (regardless of last build result)
+                if state == "disabled":
+                    color = "grey"
+                    if status not in ("disabled", "not_built"):
+                        status = "disabled"
+                else:
+                    color = original_color
+
+                # Build standardized job data structure
+                job_url = job_data.get("url", "")
+                if not job_url and base_path:
+                    # Fallback: construct URL if not provided by API
+                    job_url = f"{self.base_url}{base_path}/job/{job_name}/"
+
                 return {
                     "name": job_name,
-                    "url": job_data.get("url", ""),
-                    "color": job_data.get("color", ""),
-                    "buildable": job_data.get("buildable", False),
+                    "status": status,
+                    "state": state,  # Add state attribute for consistency with workflows
+                    "color": color,  # Color for consistency with workflows (may be overridden for disabled jobs)
+                    "urls": {
+                        "job_page": job_url,  # Jenkins job status/build page
+                        "source": None,       # No source URL available for Jenkins jobs
+                        "api": url            # API endpoint for this job
+                    },
+                    "buildable": buildable,
+                    "disabled": disabled,  # Keep original field for reference
                     "description": job_data.get("description", ""),
                     "last_build": last_build_info
                 }
@@ -560,6 +685,89 @@ class JenkinsAPIClient:
         except Exception as e:
             logging.debug(f"Exception fetching job details for {job_name}: {e}")
             return {}
+
+    def _compute_jenkins_job_state(self, disabled: bool, buildable: bool) -> str:
+        """
+        Convert Jenkins disabled and buildable fields to standardized state.
+
+        Jenkins job states:
+        - disabled=True: Job is explicitly disabled
+        - disabled=False + buildable=True: Job is active and can be built
+        - disabled=False + buildable=False: Job exists but cannot be built (treat as disabled)
+
+        Args:
+            disabled: Whether the job is disabled in Jenkins
+            buildable: Whether the job is buildable
+
+        Returns:
+            State string: "active", "disabled"
+        """
+        if disabled:
+            return "disabled"
+        elif buildable:
+            return "active"
+        else:
+            # If not disabled but not buildable, consider it effectively disabled
+            return "disabled"
+
+    def _compute_workflow_color_from_state(self, state: str) -> str:
+        """
+        Convert GitHub workflow state to color for consistency with Jenkins jobs.
+
+        Args:
+            state: GitHub workflow state ("active", "disabled", etc.)
+
+        Returns:
+            Color string compatible with Jenkins color scheme
+        """
+        if not state:
+            return "grey"
+
+        state_lower = state.lower()
+
+        # Map workflow states to colors
+        state_color_map = {
+            'active': 'blue',      # Active workflows get blue (like successful Jenkins jobs)
+            'disabled': 'grey',    # Disabled workflows get grey
+            'deleted': 'red'       # Deleted workflows get red
+        }
+
+        return state_color_map.get(state_lower, "grey")
+
+    def _compute_job_status_from_color(self, color: str) -> str:
+        """
+        Convert Jenkins color field to standardized status.
+
+        Jenkins color meanings:
+        - blue: success
+        - red: failure
+        - yellow: unstable
+        - grey: not built/disabled
+        - aborted: aborted
+        - *_anime: building (animated versions)
+        """
+        if not color:
+            return "unknown"
+
+        color_lower = color.lower()
+
+        # Handle animated colors (building states)
+        if color_lower.endswith('_anime'):
+            return "building"
+
+        # Map standard colors
+        color_map = {
+            'blue': 'success',
+            'red': 'failure',
+            'yellow': 'unstable',
+            'grey': 'disabled',
+            'gray': 'disabled',
+            'aborted': 'aborted',
+            'notbuilt': 'not_built',
+            'disabled': 'disabled'
+        }
+
+        return color_map.get(color_lower, "unknown")
 
     def get_last_build_info(self, job_name: str) -> dict[str, Any]:
         """Get information about the last build of a job."""
@@ -624,13 +832,29 @@ class GitHubAPIClient:
                 workflows = []
 
                 for workflow in data.get("workflows", []):
+                    # Build standardized workflow data structure
+                    workflow_path = workflow.get("path", "")
+                    source_url = None
+                    if workflow_path and owner and repo:
+                        # Convert workflow path to GitHub source URL
+                        source_url = f"https://github.com/{owner}/{repo}/blob/master/{workflow_path}"
+
+                    # Compute color from status for consistency with Jenkins jobs
+                    workflow_state = workflow.get("state", "unknown")
+                    color = self._compute_workflow_color_from_state(workflow_state)
+
                     workflows.append({
                         "id": workflow.get("id"),
                         "name": workflow.get("name"),
-                        "path": workflow.get("path"),
-                        "state": workflow.get("state"),  # "active" or "disabled"
-                        "badge_url": workflow.get("badge_url"),
-                        "html_url": workflow.get("html_url")
+                        "path": workflow_path,
+                        "state": workflow_state,   # "active", "disabled", etc. (enabled/disabled state)
+                        "status": "unknown",       # Will be filled by get_workflow_runs_status (pass/fail status)
+                        "color": color,            # Add color attribute for consistency
+                        "urls": {
+                            "workflow_page": f"https://github.com/{owner}/{repo}/actions/workflows/{os.path.basename(workflow_path) if workflow_path else ''}",  # GitHub Actions page
+                            "source": source_url,                      # Source code URL
+                            "badge": workflow.get("badge_url")         # Badge URL
+                        }
                     })
 
                 return workflows
@@ -664,9 +888,15 @@ class GitHubAPIClient:
                 # Get the most recent run
                 latest_run = runs[0]
 
+                # Compute standardized status from conclusion and run status
+                conclusion = latest_run.get("conclusion", "unknown")
+                run_status = latest_run.get("status", "unknown")
+                standardized_status = self._compute_workflow_status(conclusion, run_status)
+
                 return {
-                    "status": latest_run.get("conclusion", "unknown"),
-                    "run_status": latest_run.get("status", "unknown"),
+                    "status": standardized_status,  # Standardized status
+                    "conclusion": conclusion,       # Keep original for compatibility
+                    "run_status": run_status,       # Keep original for compatibility
                     "last_run": {
                         "id": latest_run.get("id"),
                         "number": latest_run.get("run_number"),
@@ -685,6 +915,65 @@ class GitHubAPIClient:
             self.logger.error(f"Error fetching workflow runs for {owner}/{repo}/workflows/{workflow_id}: {e}")
             return {"status": "error", "last_run": None}
 
+    def _compute_workflow_color_from_runtime_status(self, status: str) -> str:
+        """
+        Convert runtime workflow status to color for consistency with Jenkins jobs.
+
+        Args:
+            status: Runtime workflow status ("success", "failure", "building", etc.)
+
+        Returns:
+            Color string compatible with Jenkins color scheme
+        """
+        if not status:
+            return "grey"
+
+        status_lower = status.lower()
+
+        # Map runtime statuses to colors (matching Jenkins scheme)
+        status_color_map = {
+            'success': 'blue',         # Success = blue (like Jenkins)
+            'failure': 'red',          # Failure = red
+            'building': 'blue_anime',  # Building = animated blue
+            'in_progress': 'blue_anime', # In progress = animated blue
+            'cancelled': 'grey',       # Cancelled = grey
+            'skipped': 'grey',         # Skipped = grey
+            'unknown': 'grey',         # Unknown = grey
+            'error': 'red',            # Error = red
+            'no_runs': 'grey'          # No runs = grey
+        }
+
+        return status_color_map.get(status_lower, "grey")
+
+    def _compute_workflow_status(self, conclusion: str, run_status: str) -> str:
+        """
+        Convert GitHub workflow conclusion and run status to standardized status.
+
+        GitHub conclusions: success, failure, neutral, cancelled, skipped, timed_out, action_required
+        GitHub run statuses: queued, in_progress, completed
+        """
+        if not conclusion and not run_status:
+            return "unknown"
+
+        # Handle in-progress workflows first
+        if run_status in ("queued", "in_progress"):
+            return "building"
+
+        # Handle completed workflows by conclusion
+        if run_status == "completed":
+            conclusion_map = {
+                "success": "success",
+                "failure": "failure",
+                "neutral": "success",
+                "cancelled": "cancelled",
+                "skipped": "skipped",
+                "timed_out": "failure",
+                "action_required": "failure"
+            }
+            return conclusion_map.get(conclusion, "unknown")
+
+        return "unknown"
+
     def get_repository_workflow_status_summary(self, owner: str, repo: str) -> dict[str, Any]:
         """Get comprehensive workflow status summary for a repository."""
         workflows = self.get_repository_workflows(owner, repo)
@@ -693,7 +982,9 @@ class GitHubAPIClient:
             return {
                 "has_workflows": False,
                 "workflows": [],
-                "overall_status": "no_workflows"
+                "overall_status": "no_workflows",
+                "github_owner": owner,
+                "github_repo": repo
             }
 
         workflow_statuses = []
@@ -703,10 +994,23 @@ class GitHubAPIClient:
             workflow_id = workflow.get("id")
             if workflow_id:
                 status_info = self.get_workflow_runs_status(owner, repo, workflow_id)
-                workflow_statuses.append({
+
+                # Merge workflow info with status info, ensuring standardized structure
+                merged_workflow = {
                     **workflow,
                     **status_info
-                })
+                }
+
+                # Update URLs with source URL if not already present
+                if "urls" in merged_workflow and workflow.get("path"):
+                    if not merged_workflow["urls"].get("source"):
+                        merged_workflow["urls"]["source"] = f"https://github.com/{owner}/{repo}/blob/master/{workflow['path']}"
+
+                # Update color based on runtime status if available
+                if "status" in status_info and status_info["status"]:
+                    merged_workflow["color"] = self._compute_workflow_color_from_runtime_status(status_info["status"])
+
+                workflow_statuses.append(merged_workflow)
 
         # Determine overall status
         if not workflow_statuses:
@@ -725,8 +1029,34 @@ class GitHubAPIClient:
             "total_workflows": len(workflows),
             "active_workflows": len(active_workflows),
             "workflows": workflow_statuses,
-            "overall_status": overall_status
+            "overall_status": overall_status,
+            "github_owner": owner,
+            "github_repo": repo
         }
+
+    def _compute_workflow_color_from_state(self, state: str) -> str:
+        """
+        Convert GitHub workflow state to color for consistency with Jenkins jobs.
+
+        Args:
+            state: GitHub workflow state ("active", "disabled", etc.)
+
+        Returns:
+            Color string compatible with Jenkins color scheme
+        """
+        if not state:
+            return "grey"
+
+        state_lower = state.lower()
+
+        # Map workflow states to colors
+        state_color_map = {
+            'active': 'blue',      # Active workflows get blue (like successful Jenkins jobs)
+            'disabled': 'grey',    # Disabled workflows get grey
+            'deleted': 'red'       # Deleted workflows get red
+        }
+
+        return state_color_map.get(state_lower, "grey")
 
 
 # =============================================================================
@@ -755,6 +1085,10 @@ class GitDataCollector:
         # Initialize Jenkins API client if configured
         self.jenkins_client = None
         self.jenkins_jobs_cache: dict[str, list[dict[str, Any]]] = {}  # Cache for Jenkins job data
+        self.allocated_jenkins_jobs: set[str] = set()  # Track allocated jobs to prevent duplicates
+        self.all_jenkins_jobs: dict[str, Any] = {}  # Cache all jobs fetched once
+        self.orphaned_jenkins_jobs: dict[str, dict[str, Any]] = {}  # Track jobs from archived projects
+        self._jenkins_initialized = False
 
         # Check for Jenkins host from environment variable
         jenkins_host = os.environ.get("JENKINS_HOST")
@@ -783,10 +1117,8 @@ class GitDataCollector:
             try:
                 self.jenkins_client = JenkinsAPIClient(jenkins_host, timeout)
                 self.logger.info(f"Initialized Jenkins API client for {jenkins_host} (from environment)")
-                # Test the connection
-                test_jobs = self.jenkins_client.get_all_jobs()
-                job_count = len(test_jobs.get("jobs", []))
-                self.logger.info(f"Jenkins connection test: found {job_count} total jobs on {jenkins_host}")
+                # Test the connection and cache all jobs upfront
+                self._initialize_jenkins_cache()
             except Exception as e:
                 self.logger.error(f"Failed to initialize Jenkins API client for {jenkins_host}: {e}")
                 self.jenkins_client = None
@@ -799,10 +1131,27 @@ class GitDataCollector:
                 try:
                     self.jenkins_client = JenkinsAPIClient(host, timeout)
                     self.logger.info(f"Initialized Jenkins API client for {host} (from config)")
+                    # Initialize cache for config-based Jenkins client too
+                    self._initialize_jenkins_cache()
                 except Exception as e:
                     self.logger.error(f"Failed to initialize Jenkins API client for {host}: {e}")
             else:
                 self.logger.error("Jenkins enabled but no host configured")
+
+    def _initialize_jenkins_cache(self):
+        """Initialize Jenkins jobs cache at startup for better performance."""
+        if not self.jenkins_client or self._jenkins_initialized:
+            return
+
+        try:
+            self.logger.info("Caching all Jenkins jobs for efficient allocation...")
+            self.all_jenkins_jobs = self.jenkins_client.get_all_jobs()
+            job_count = len(self.all_jenkins_jobs.get("jobs", []))
+            self.logger.info(f"Jenkins cache initialized: {job_count} total jobs available")
+            self._jenkins_initialized = True
+        except Exception as e:
+            self.logger.error(f"Failed to initialize Jenkins cache: {e}")
+            self._jenkins_initialized = False
 
     def _fetch_all_gerrit_projects(self) -> None:
         """Fetch all Gerrit project data upfront and cache it."""
@@ -1031,10 +1380,22 @@ class GitDataCollector:
             # Add Jenkins job information if available
             if self.jenkins_client:
                 jenkins_jobs = self._get_jenkins_jobs_for_repo(gerrit_project)
+
+                # Store computed status for each job for consistent access
+                enriched_jobs = []
+                for job in jenkins_jobs:
+                    if isinstance(job, dict) and "status" in job:
+                        enriched_jobs.append(job)
+                    else:
+                        # Fallback for jobs missing status (shouldn't happen with new structure)
+                        enriched_job = dict(job) if isinstance(job, dict) else {"name": str(job)}
+                        enriched_job["status"] = "unknown"
+                        enriched_jobs.append(enriched_job)
+
                 repo_data["jenkins"] = {
-                    "jobs": jenkins_jobs,
-                    "job_count": len(jenkins_jobs),
-                    "has_jobs": len(jenkins_jobs) > 0
+                    "jobs": enriched_jobs,
+                    "job_count": len(enriched_jobs),
+                    "has_jobs": len(enriched_jobs) > 0
                 }
             unique_contributors = repo_data["unique_contributors"]
             for window in self.time_windows:
@@ -1058,21 +1419,218 @@ class GitDataCollector:
             return metrics
 
     def _get_jenkins_jobs_for_repo(self, repo_name: str) -> list[dict[str, Any]]:
-        """Get Jenkins jobs for a specific repository."""
-        if not self.jenkins_client:
-            self.logger.debug(f"No Jenkins client available for {repo_name}")
+        """Get Jenkins jobs for a specific repository with duplicate prevention."""
+        if not self.jenkins_client or not self._jenkins_initialized:
+            self.logger.debug(f"No Jenkins client available or cache not initialized for {repo_name}")
             return []
 
+        # Use cached data instead of making API calls
+        if repo_name in self.jenkins_jobs_cache:
+            self.logger.debug(f"Using cached Jenkins jobs for {repo_name}")
+            return self.jenkins_jobs_cache[repo_name]
+
         try:
-            jobs = self.jenkins_client.get_jobs_for_project(repo_name)
+            jobs = self.jenkins_client.get_jobs_for_project(repo_name, self.allocated_jenkins_jobs)
             if jobs:
                 self.logger.debug(f"Found {len(jobs)} Jenkins jobs for {repo_name}: {[job.get('name') for job in jobs]}")
+                # Cache the results
+                self.jenkins_jobs_cache[repo_name] = jobs
             else:
                 self.logger.debug(f"No Jenkins jobs found for {repo_name}")
+                self.jenkins_jobs_cache[repo_name] = []
             return jobs
         except Exception as e:
             self.logger.warning(f"Error fetching Jenkins jobs for {repo_name}: {e}")
+            self.jenkins_jobs_cache[repo_name] = []
             return []
+
+    def reset_jenkins_allocation_state(self):
+        """Reset Jenkins job allocation state for a fresh start."""
+        self.allocated_jenkins_jobs.clear()
+        self.jenkins_jobs_cache.clear()
+        self.orphaned_jenkins_jobs.clear()
+        self.logger.info("Reset Jenkins job allocation state")
+
+    def get_jenkins_job_allocation_summary(self) -> dict[str, Any]:
+        """Get summary of Jenkins job allocation for auditing purposes."""
+        if not self.jenkins_client or not self._jenkins_initialized:
+            return {"error": "No Jenkins client available or not initialized"}
+
+        # Use cached data
+        total_jobs = len(self.all_jenkins_jobs.get("jobs", []))
+        allocated_count = len(self.allocated_jenkins_jobs)
+        unallocated_count = total_jobs - allocated_count
+
+        return {
+            "total_jenkins_jobs": total_jobs,
+            "allocated_jobs": allocated_count,
+            "unallocated_jobs": unallocated_count,
+            "allocated_job_names": sorted(list(self.allocated_jenkins_jobs)),
+            "allocation_percentage": round((allocated_count / total_jobs * 100), 2) if total_jobs > 0 else 0
+        }
+
+    def validate_jenkins_job_allocation(self) -> list[str]:
+        """Validate Jenkins job allocation and return any issues found."""
+        issues = []
+
+        if not self.jenkins_client or not self._jenkins_initialized:
+            return ["No Jenkins client available or not initialized for validation"]
+
+        # Check for duplicate allocations (shouldn't happen with new system)
+        allocation_summary = self.get_jenkins_job_allocation_summary()
+
+        if "error" in allocation_summary:
+            issues.append(allocation_summary["error"])
+            return issues
+
+        if allocation_summary["unallocated_jobs"] > 0:
+            # Use cached data
+            all_job_names = {job.get("name", "") for job in self.all_jenkins_jobs.get("jobs", [])}
+            unallocated_jobs = all_job_names - self.allocated_jenkins_jobs
+
+            # Try to match unallocated jobs to archived Gerrit projects
+            self._allocate_orphaned_jobs_to_archived_projects(unallocated_jobs)
+
+            # Identify infrastructure jobs that legitimately don't belong to projects
+            infrastructure_patterns = [
+                'lab-', 'lf-', 'openci-', 'rtdv3-', 'global-jjb-', 'ci-management-',
+                'releng-', 'autorelease-', 'docs-', 'infra-'
+            ]
+
+            # After orphaned job detection, recalculate what's truly unallocated
+            orphaned_job_names = set(self.orphaned_jenkins_jobs.keys())
+            remaining_unallocated = unallocated_jobs - orphaned_job_names
+
+            infrastructure_jobs = set()
+            project_jobs = set()
+
+            for job in remaining_unallocated:
+                job_lower = job.lower()
+                is_infrastructure = any(job_lower.startswith(pattern) for pattern in infrastructure_patterns)
+                if is_infrastructure:
+                    infrastructure_jobs.add(job)
+                else:
+                    project_jobs.add(job)
+
+            # Report orphaned jobs as informational (matched to archived projects)
+            if orphaned_job_names:
+                orphaned_jobs_list = sorted(list(orphaned_job_names))
+                issues.append(f"INFO: Found {len(orphaned_job_names)} Jenkins jobs matched to archived/read-only Gerrit projects")
+                issues.append(f"Orphaned jobs: {orphaned_jobs_list}")
+
+                # Group by project state
+                by_state: dict[str, list[str]] = {}
+                for job_name in orphaned_job_names:
+                    job_info = self.orphaned_jenkins_jobs[job_name]
+                    state = job_info.get('state', 'UNKNOWN')
+                    if state not in by_state:
+                        by_state[state] = []
+                    by_state[state].append(job_name)
+
+                for state, jobs in by_state.items():
+                    issues.append(f"  - {len(jobs)} jobs for {state} projects: {sorted(jobs)}")
+
+            # Only report remaining project jobs as critical errors
+            if project_jobs:
+                project_jobs_list = sorted(list(project_jobs))
+                issues.append(f"CRITICAL ERROR: Found {len(project_jobs)} unallocated project Jenkins jobs")
+                issues.append(f"Unallocated project jobs: {project_jobs_list}")
+
+                # Analyze patterns in project jobs only
+                patterns: dict[str, int] = {}
+                for job in project_jobs:
+                    parts = job.lower().split('-')
+                    if parts:
+                        first_part = parts[0]
+                        patterns[first_part] = patterns.get(first_part, 0) + 1
+
+                if patterns:
+                    common_patterns = sorted(patterns.items(), key=lambda x: x[1], reverse=True)[:5]
+                    issues.append(f"Common patterns in unallocated project jobs: {common_patterns}")
+
+                # Generate detailed suggestions for fixing unallocated project jobs
+                suggestions = []
+                for job in sorted(project_jobs)[:20]:  # Analyze first 20
+                    job_parts = job.lower().split('-')
+                    if job_parts:
+                        suggestions.append(f"  - '{job}' might belong to project containing '{job_parts[0]}'")
+
+                if suggestions:
+                    issues.append("Suggestions for unallocated project jobs:")
+                    issues.extend(suggestions)
+
+            # Log infrastructure jobs as informational
+            if infrastructure_jobs:
+                infrastructure_jobs_list = sorted(list(infrastructure_jobs))
+                issues.append(f"INFO: Found {len(infrastructure_jobs)} infrastructure Jenkins jobs (not assigned to projects)")
+                issues.append(f"Infrastructure jobs: {infrastructure_jobs_list}")
+
+        return issues
+
+    def _allocate_orphaned_jobs_to_archived_projects(self, unallocated_jobs: set[str]) -> None:
+        """Try to match unallocated Jenkins jobs to archived/read-only Gerrit projects."""
+        if not self.gerrit_projects_cache or not unallocated_jobs:
+            return
+
+        self.logger.info(f"Attempting to match {len(unallocated_jobs)} unallocated Jenkins jobs to archived Gerrit projects")
+
+        # Get all archived/read-only projects
+        archived_projects = {}
+        for project_name, project_info in self.gerrit_projects_cache.items():
+            state = project_info.get('state', 'ACTIVE')
+            if state in ['READ_ONLY', 'HIDDEN']:
+                archived_projects[project_name] = project_info
+
+        self.logger.debug(f"Found {len(archived_projects)} archived/read-only projects in Gerrit")
+
+        # Try to match jobs to archived projects using same logic as active projects
+        for job_name in list(unallocated_jobs):  # Use list() to avoid modification during iteration
+            best_match = None
+            best_score = 0
+
+            for project_name, project_info in archived_projects.items():
+                project_job_name = project_name.replace("/", "-")
+                # Check if jenkins_client is available
+                if self.jenkins_client:
+                    score = self.jenkins_client._calculate_job_match_score(job_name, project_name, project_job_name)
+                else:
+                    # Fallback to simple matching if no Jenkins client
+                    score = 100 if job_name.startswith(project_job_name) else 0
+
+                if score > best_score:
+                    best_score = score
+                    best_match = (project_name, project_info)
+
+            if best_match and best_score > 0:
+                project_name, project_info = best_match
+                self.orphaned_jenkins_jobs[job_name] = {
+                    'project_name': project_name,
+                    'state': project_info.get('state', 'UNKNOWN'),
+                    'score': best_score
+                }
+                self.logger.info(f"Matched orphaned job '{job_name}' to archived project '{project_name}' (state: {project_info.get('state')}, score: {best_score})")
+
+    def get_orphaned_jenkins_jobs_summary(self) -> dict[str, Any]:
+        """Get summary of Jenkins jobs matched to archived projects."""
+        if not self.orphaned_jenkins_jobs:
+            return {
+                "total_orphaned_jobs": 0,
+                "by_state": {},
+                "jobs": {}
+            }
+
+        by_state: dict[str, list[str]] = {}
+        for job_name, job_info in self.orphaned_jenkins_jobs.items():
+            state = job_info.get('state', 'UNKNOWN')
+            if state not in by_state:
+                by_state[state] = []
+            by_state[state].append(job_name)
+
+        return {
+            "total_orphaned_jobs": len(self.orphaned_jenkins_jobs),
+            "by_state": {state: len(jobs) for state, jobs in by_state.items()},
+            "jobs": dict(self.orphaned_jenkins_jobs)
+        }
 
     def bucket_commit_into_windows(self, commit_datetime: datetime.datetime, time_windows: dict[str, dict[str, Any]]) -> List[str]:
         """
@@ -1484,6 +2042,7 @@ class FeatureRegistry:
         self.register("project_types", self._check_project_types)
         self.register("workflows", self._check_workflows)
         self.register("gitreview", self._check_gitreview)
+        self.register("github_mirror", self._check_github_mirror)
 
     def detect_features(self, repo_path: Path) -> dict[str, Any]:
         """
@@ -1918,6 +2477,49 @@ class FeatureRegistry:
 
         return result
 
+    def _check_github_mirror(self, repo_path: Path) -> dict[str, Any]:
+        """Check if repository has a GitHub mirror that actually exists."""
+        try:
+            # First check if it looks like a GitHub repository
+            has_github_indicators = self._is_github_repository(repo_path)
+
+            if not has_github_indicators:
+                return {
+                    "exists": False,
+                    "owner": "",
+                    "repo": "",
+                    "reason": "no_github_indicators"
+                }
+
+            # Check if the GitHub repository actually exists
+            owner, repo_name = self._extract_github_repo_info(repo_path)
+            if not owner or not repo_name:
+                return {
+                    "exists": False,
+                    "owner": owner,
+                    "repo": repo_name,
+                    "reason": "cannot_determine_github_info"
+                }
+
+            # Verify the repository exists on GitHub
+            exists = self._check_github_mirror_exists(repo_path)
+
+            return {
+                "exists": exists,
+                "owner": owner,
+                "repo": repo_name,
+                "reason": "verified" if exists else "not_found_on_github"
+            }
+
+        except Exception as e:
+            self.logger.debug(f"GitHub mirror check failed for {repo_path}: {e}")
+            return {
+                "exists": False,
+                "owner": "",
+                "repo": "",
+                "reason": f"error: {str(e)}"
+            }
+
     def _analyze_workflow_file(self, workflow_file: Path, verify_patterns: list[str], merge_patterns: list[str]) -> dict[str, Any]:
         """Analyze a single workflow file for classification."""
         workflow_info: dict[str, Any] = {
@@ -2018,6 +2620,37 @@ class FeatureRegistry:
                 return True
 
             return False
+        except Exception:
+            return False
+
+    def _check_github_mirror_exists(self, repo_path: Path) -> bool:
+        """Check if repository actually exists on GitHub by making an API call."""
+        try:
+            owner, repo_name = self._extract_github_repo_info(repo_path)
+            if not owner or not repo_name:
+                return False
+
+            # Try to access GitHub API to verify repository exists
+            github_token = self.config.get("extensions", {}).get("github_api", {}).get("token") or os.environ.get("GITHUB_TOKEN")
+
+            if github_token:
+                try:
+                    github_client = GitHubAPIClient(github_token)
+                    response = github_client.client.get(f"/repos/{owner}/{repo_name}")
+                    return response.status_code == 200
+                except Exception as e:
+                    self.logger.debug(f"GitHub API check failed for {owner}/{repo_name}: {e}")
+
+            # Fallback: make a simple HTTP request without authentication
+            try:
+                import httpx
+                with httpx.Client(timeout=10.0) as client:
+                    response = client.get(f"https://api.github.com/repos/{owner}/{repo_name}")
+                    return response.status_code == 200
+            except Exception as e:
+                self.logger.debug(f"GitHub repository existence check failed for {owner}/{repo_name}: {e}")
+                return False
+
         except Exception:
             return False
 
@@ -2601,6 +3234,9 @@ class ReportRenderer:
         # Deployed CI/CD jobs telemetry
         sections.append(self._generate_deployed_workflows_section(data))
 
+        # Orphaned Jenkins jobs from archived projects
+        sections.append(self._generate_orphaned_jobs_section(data))
+
         # Footer
         sections.append("Generated with ❤️ by Release Engineering")
 
@@ -2812,13 +3448,23 @@ class ReportRenderer:
         """
         Determine Jenkins job status for color coding.
 
+        Now uses the standardized status and state fields if available, falls back to color/build interpretation.
+
         Args:
-            job_data: Jenkins job data containing color and last_build info
+            job_data: Jenkins job data containing status, state, color and last_build info
 
         Returns:
             Status string: "success", "failure", "unstable", "building", "disabled", "unknown"
         """
-        # Jenkins color codes mapping
+        # Use standardized status if available
+        if "status" in job_data and job_data["status"]:
+            status = job_data["status"]
+            # Check state for disabled jobs
+            if "state" in job_data and job_data["state"] == "disabled":
+                return "disabled"
+            return status
+
+        # Fallback to original color-based logic for compatibility
         color = job_data.get("color", "").lower()
         last_build = job_data.get("last_build", {})
         last_result = (last_build.get("result") or "").upper()
@@ -2859,18 +3505,30 @@ class ReportRenderer:
         """
         Determine GitHub workflow status for color coding.
 
+        Now uses the standardized status field if available, falls back to conclusion/run_status interpretation.
+
         Args:
             workflow_data: Workflow data from GitHub API
 
         Returns:
-            Status string: "success", "failure", "in_progress", "no_runs", "unknown"
+            Status string: "success", "failure", "building", "no_runs", "unknown"
         """
-        # Get the conclusion (final result) and run status (current state)
-        conclusion = workflow_data.get("status", "unknown")  # This is actually the conclusion
-        run_status = workflow_data.get("run_status", "unknown")  # This is the run state
+        # Use standardized status if available (from workflow runs)
+        # Note: "status" contains run results (success/failure), different from "state" (active/disabled)
+        if "status" in workflow_data and workflow_data["status"] and workflow_data["status"] != "unknown":
+            status = workflow_data["status"]
+            # Map building to in_progress for display compatibility
+            if status == "building":
+                return "in_progress"
+            return status
+
+        # Fallback to original logic for compatibility
+        # Get the conclusion (final result) and run status (current execution state)
+        conclusion = workflow_data.get("conclusion", "unknown")
+        run_status = workflow_data.get("run_status", "unknown")
 
         # Handle in-progress workflows first
-        if run_status in ["in_progress", "queued", "pending"]:
+        if run_status in ("queued", "in_progress"):
             return "in_progress"
 
         # Handle completed workflows - map conclusion to our status
@@ -2878,19 +3536,18 @@ class ReportRenderer:
             conclusion_map = {
                 "success": "success",
                 "failure": "failure",
+                "neutral": "success",  # Treat neutral as success for display
                 "cancelled": "cancelled",
                 "skipped": "skipped",
                 "timed_out": "failure",
-                "action_required": "failure",
-                "neutral": "neutral"
+                "action_required": "failure"
             }
             return conclusion_map.get(conclusion, "unknown")
 
-        # Handle special cases
+        # Special case for no runs
         if conclusion == "no_runs":
             return "no_runs"
 
-        # Default to unknown for any other cases
         return "unknown"
 
     def _apply_status_color_classes(self, item_name: str, status: str, item_type: str = "workflow") -> str:
@@ -2918,11 +3575,67 @@ class ReportRenderer:
             "neutral": "status-neutral",
             "skipped": "status-skipped",
             "no_runs": "status-no-runs",
+            "active": "status-success",
             "unknown": "status-unknown"
         }
 
         css_class = class_map.get(status, "status-unknown")
         return f'<span class="{css_class} {item_type}-status">{item_name}</span>'
+
+    def _construct_github_workflow_url(self, gerrit_project: str, workflow_name: str) -> str:
+        """
+        Construct GitHub source URL for a workflow file based on Gerrit project.
+
+        Args:
+            gerrit_project: Gerrit project name (e.g., "portal-ng/bff", "doc")
+            workflow_name: Workflow file name (e.g., "ci.yaml")
+
+        Returns:
+            GitHub source URL for the workflow file
+        """
+        if not gerrit_project or not workflow_name:
+            return ""
+
+        # Convert Gerrit project name to GitHub repository name
+        github_repo_name = self._gerrit_to_github_repo_name(gerrit_project)
+        return f"https://github.com/onap/{github_repo_name}/blob/master/.github/workflows/{workflow_name}"
+
+    def _construct_github_workflow_actions_url(self, gerrit_project: str, workflow_name: str) -> str:
+        """
+        Construct GitHub Actions URL for a workflow based on Gerrit project.
+
+        Args:
+            gerrit_project: Gerrit project name (e.g., "portal-ng/bff", "doc")
+            workflow_name: Workflow file name (e.g., "ci.yaml")
+
+        Returns:
+            GitHub Actions URL for the workflow
+        """
+        if not gerrit_project or not workflow_name:
+            return ""
+
+        # Convert Gerrit project name to GitHub repository name
+        github_repo_name = self._gerrit_to_github_repo_name(gerrit_project)
+        return f"https://github.com/onap/{github_repo_name}/actions/workflows/{workflow_name}"
+
+    def _gerrit_to_github_repo_name(self, gerrit_project: str) -> str:
+        """
+        Convert Gerrit project name to GitHub repository name using ONAP naming conventions.
+
+        Args:
+            gerrit_project: Gerrit project name (e.g., "ccsdk/parent", "aai/babel")
+
+        Returns:
+            GitHub repository name (e.g., "ccsdk-parent", "aai-babel")
+        """
+        if not gerrit_project:
+            return ""
+
+        # Convert slashes to dashes for ONAP GitHub mirrors
+        # e.g., "ccsdk/parent" -> "ccsdk-parent"
+        #       "aai/babel" -> "aai-babel"
+        #       "policy/apex-pdp" -> "policy-apex-pdp"
+        return gerrit_project.replace("/", "-")
 
     def _generate_deployed_workflows_section(self, data: dict[str, Any]) -> str:
         """Generate deployed CI/CD jobs telemetry section with status color-coding."""
@@ -2981,15 +3694,32 @@ class ReportRenderer:
         for repo in sorted(repos_with_cicd, key=lambda x: x["gerrit_project"]):
             name = repo["gerrit_project"]
 
+            # Check if GitHub mirror exists for this repository
+            github_mirror_info = repo.get("features", {}).get("github_mirror", {})
+
+            # Only apply red styling if we have explicit github_mirror data AND it shows no mirror
+            # Default to normal styling if no github_mirror data exists (conservative approach)
+            if github_mirror_info and github_mirror_info.get("exists") is False:
+                project_name = f'<span style="color: red; font-weight: bold;">{name}</span>'
+                has_github_mirror = False
+            else:
+                project_name = name
+                has_github_mirror = True
+
             # Build workflow names with color coding
             workflow_items = []
             workflows_data = repo.get("workflows_data", {})
+            self.logger.debug(f"[workflows] Processing repo {name}: workflows_data keys={list(workflows_data.keys())}, has_runtime_status={workflows_data.get('has_runtime_status', 'MISSING')}, has_github_mirror={has_github_mirror}")
 
-            if workflows_data.get("has_runtime_status", False):
+            # Check if we have valid GitHub API data or should fall back to failure status
+            has_github_api_data = (workflows_data.get("has_runtime_status", False) and
+                                 workflows_data.get("github_api_data", {}).get("workflows"))
+
+            if has_github_api_data:
                 # Use GitHub API data for status-aware rendering
                 github_workflows = workflows_data.get("github_api_data", {}).get("workflows", [])
 
-                # Create a map of workflow file names to their status using path field
+                # Create a map of workflow file names to their execution status using path field
                 workflow_status_map = {}
                 import os
 
@@ -2999,9 +3729,15 @@ class ReportRenderer:
                     if workflow_path:
                         file_name = os.path.basename(workflow_path)
                         if file_name in repo["workflow_names"]:
-                            status = self._determine_github_workflow_status(workflow)
-                            workflow_status_map[file_name] = status
-                            self.logger.debug(f"[workflows] Path match status mapped: path={workflow_path} file={file_name} status={status}")
+                            # Only process workflows that are enabled/active
+                            if workflow.get("state") == "active":
+                                status = self._determine_github_workflow_status(workflow)
+                                workflow_status_map[file_name] = status
+                                self.logger.debug(f"[workflows] Path match status mapped: path={workflow_path} file={file_name} status={status}")
+                            else:
+                                # Disabled workflows get disabled status
+                                workflow_status_map[file_name] = "disabled"
+                                self.logger.debug(f"[workflows] Disabled workflow: path={workflow_path} file={file_name}")
                         else:
                             self.logger.debug(f"[workflows] Path basename '{file_name}' not in local workflow_names {repo['workflow_names']} (repo={name})")
 
@@ -3025,35 +3761,118 @@ class ReportRenderer:
                 if github_workflows and not workflow_status_map and repo["workflow_names"]:
                     self.logger.debug(f"[workflows] No workflow runtime statuses mapped (possible API auth/visibility issue) repo={name} github_workflows={len(github_workflows)} local_files={repo['workflow_names']}")
 
-                # Build the list with status information
+                # If GitHub API returned no workflows but local files exist, assume API failure
+                elif not github_workflows and repo["workflow_names"] and workflows_data.get("has_runtime_status", False):
+                    self.logger.debug(f"[workflows] GitHub API returned no workflows for {name}, defaulting to unknown status for local workflow files")
+                    for workflow_name in repo["workflow_names"]:
+                        workflow_status_map[workflow_name] = "unknown"
+
+                # Build the list with status information and hyperlinks
                 for workflow_name in sorted(repo["workflow_names"]):
                     status = workflow_status_map.get(workflow_name, "unknown")
                     colored_name = self._apply_status_color_classes(workflow_name, status, "workflow")
-                    workflow_items.append(colored_name)
+                    self.logger.debug(f"[workflows] Applied color to {workflow_name}: status={status}, colored_name={colored_name[:100]}...")
+
+                    # Find the corresponding workflow data to get URLs
+                    workflow_url = None
+                    for workflow in github_workflows:
+                        workflow_path = workflow.get("path", "")
+                        if workflow_path and os.path.basename(workflow_path) == workflow_name:
+                            # Prefer workflow page URL for runs/status over source code URL
+                            urls = workflow.get("urls", {})
+                            workflow_url = urls.get("workflow_page")
+                            break
+
+                    # If no workflow URL found in GitHub API data, construct one using GitHub owner/repo info
+                    if not workflow_url:
+                        workflows_data = repo.get("workflows_data", {})
+                        github_api_data = workflows_data.get("github_api_data", {})
+                        github_owner = github_api_data.get("github_owner")
+                        github_repo = github_api_data.get("github_repo")
+
+                        if github_owner and github_repo:
+                            # Use actual GitHub owner/repo from API data
+                            workflow_url = f"https://github.com/{github_owner}/{github_repo}/actions/workflows/{workflow_name}"
+                        elif repo.get("gerrit_project"):
+                            # Fallback to constructed URL from Gerrit project
+                            workflow_url = self._construct_github_workflow_actions_url(repo["gerrit_project"], workflow_name)
+
+                    if workflow_url:
+                        linked_name = f'<a href="{workflow_url}" target="_blank">{colored_name}</a>'
+                        workflow_items.append(linked_name)
+                    else:
+                        workflow_items.append(colored_name)
             else:
-                # Fallback to static names without status
+                # Fallback when no GitHub API data is available
+                workflows_data_workflows = workflows_data.get("github_api_data", {}).get("workflows", [])
                 for workflow_name in sorted(repo["workflow_names"]):
-                    colored_name = self._apply_status_color_classes(workflow_name, "unknown", "workflow")
-                    workflow_items.append(colored_name)
+                    # For workflows that are expected to have status but GitHub API failed,
+                    # default to unknown to indicate the monitoring is not working
+                    default_status = "unknown"
+                    colored_name = self._apply_status_color_classes(workflow_name, default_status, "workflow")
+                    self.logger.debug(f"[workflows] Fallback color applied to {workflow_name}: status={default_status}, colored_name={colored_name[:100]}...")
+
+                    # Try to find URL from workflows data even without runtime status
+                    workflow_url = None
+                    for workflow in workflows_data_workflows:
+                        workflow_path = workflow.get("path", "")
+                        if workflow_path and os.path.basename(workflow_path) == workflow_name:
+                            # Prefer workflow page URL for runs/status over source code URL
+                            urls = workflow.get("urls", {})
+                            workflow_url = urls.get("workflow_page")
+                            break
+
+                    # If no API URL, try to construct GitHub Actions URL using stored GitHub info
+                    if not workflow_url:
+                        workflows_data = repo.get("workflows_data", {})
+                        github_api_data = workflows_data.get("github_api_data", {})
+                        github_owner = github_api_data.get("github_owner")
+                        github_repo = github_api_data.get("github_repo")
+
+                        if github_owner and github_repo:
+                            # Use actual GitHub owner/repo from API data
+                            workflow_url = f"https://github.com/{github_owner}/{github_repo}/actions/workflows/{workflow_name}"
+                        elif repo.get("gerrit_project"):
+                            # Fallback to constructed URL from Gerrit project
+                            workflow_url = self._construct_github_workflow_actions_url(repo["gerrit_project"], workflow_name)
+
+                    # Only skip links/colors if we have explicit github_mirror data showing no mirror
+                    if github_mirror_info and github_mirror_info.get("exists") is False:
+                        # No GitHub mirror - just add plain text without links or color coding
+                        workflow_items.append(workflow_name)
+                    elif workflow_url:
+                        linked_name = f'<a href="{workflow_url}" target="_blank">{colored_name}</a>'
+                        workflow_items.append(linked_name)
+                    else:
+                        workflow_items.append(colored_name)
 
             workflow_names_str = "<br>".join(workflow_items) if workflow_items else ""
 
-            # Build Jenkins job names with color coding based on status
+            # Build Jenkins job names with color coding based on status and hyperlinks
             jenkins_items = []
             for job in repo["jenkins_jobs"]:
                 job_name = job.get("name", "Unknown")
                 status = self._determine_jenkins_job_status(job)
                 colored_name = self._apply_status_color_classes(job_name, status, "jenkins")
-                jenkins_items.append(colored_name)
+
+                # Get Jenkins job URL from URLs structure
+                urls = job.get("urls", {})
+                job_url = urls.get("job_page")
+
+                if job_url:
+                    linked_name = f'<a href="{job_url}" target="_blank">{colored_name}</a>'
+                    jenkins_items.append(linked_name)
+                else:
+                    jenkins_items.append(colored_name)
             jenkins_names_str = "<br>".join(jenkins_items) if jenkins_items else ""
 
             workflow_count = repo["workflow_count"]
             job_count = repo["job_count"]
 
             if has_any_jenkins:
-                lines.append(f"| {name} | {workflow_names_str} | {workflow_count} | {jenkins_names_str} | {job_count} |")
+                lines.append(f"| {project_name} | {workflow_names_str} | {workflow_count} | {jenkins_names_str} | {job_count} |")
             else:
-                lines.append(f"| {name} | {workflow_names_str} | {workflow_count} | {job_count} |")
+                lines.append(f"| {project_name} | {workflow_names_str} | {workflow_count} | {job_count} |")
 
         lines.extend(["", f"**Total:** {len(repos_with_cicd)} repositories with CI/CD jobs"])
         return "\n".join(lines)
@@ -3253,6 +4072,69 @@ class ReportRenderer:
             status = status_map.get(activity_status, "🛑")
 
             lines.append(f"| {name} | {primary_type} | {dependabot} | {pre_commit} | {readthedocs} | {gitreview} | {g2g} | {status} |")
+
+        return "\n".join(lines)
+
+    def _generate_orphaned_jobs_section(self, data: dict[str, Any]) -> str:
+        """Generate section for Jenkins jobs matched to archived/read-only Gerrit projects."""
+        orphaned_data = data.get("orphaned_jenkins_jobs", {})
+
+        if not orphaned_data or orphaned_data.get("total_orphaned_jobs", 0) == 0:
+            return ""  # Don't show section if no orphaned jobs
+
+        total_orphaned = orphaned_data.get("total_orphaned_jobs", 0)
+        by_state = orphaned_data.get("by_state", {})
+        jobs = orphaned_data.get("jobs", {})
+
+        lines = [
+            "## 🏚️ Orphaned Jenkins Jobs (Archived Projects)",
+            "",
+            f"**Total Orphaned Jobs:** {total_orphaned}",
+            "",
+            "These Jenkins jobs belong to archived or read-only Gerrit projects and should likely be removed:",
+            ""
+        ]
+
+        # Summary by project state
+        if by_state:
+            lines.append("### Summary by Project State")
+            lines.append("")
+            for state, count in sorted(by_state.items()):
+                lines.append(f"- **{state}:** {count} jobs")
+            lines.append("")
+
+        # Detailed table
+        lines.extend([
+            "### Detailed Job Listing",
+            "",
+            "| Job Name | Gerrit Project | Project State | Match Score |",
+            "|----------|----------------|---------------|-------------|"
+        ])
+
+        # Sort jobs by project name for better organization
+        sorted_jobs = sorted(jobs.items(), key=lambda x: x[1].get('project_name', ''))
+
+        for job_name, job_info in sorted_jobs:
+            project_name = job_info.get('project_name', 'Unknown')
+            state = job_info.get('state', 'UNKNOWN')
+            score = job_info.get('score', 0)
+
+            # Color-code based on state
+            if state == 'READ_ONLY':
+                state_display = f"🔒 {state}"
+            elif state == 'HIDDEN':
+                state_display = f"👻 {state}"
+            else:
+                state_display = f"❓ {state}"
+
+            lines.append(f"| `{job_name}` | `{project_name}` | {state_display} | {score} |")
+
+        lines.extend([
+            "",
+            "**Recommendation:** Review these jobs and remove them if they are no longer needed, ",
+            "since their associated Gerrit projects are archived or read-only.",
+            ""
+        ])
 
         return "\n".join(lines)
 
@@ -3909,6 +4791,49 @@ class RepositoryReporter:
         report_data["organizations"] = self.aggregator.compute_org_rollups(report_data["authors"])
         report_data["summaries"] = self.aggregator.aggregate_global_data(successful_repos)
 
+        # Log comprehensive Jenkins job allocation summary for auditing
+        if self.git_collector.jenkins_client and self.git_collector._jenkins_initialized:
+            allocation_summary = self.git_collector.get_jenkins_job_allocation_summary()
+
+            self.logger.info(f"Jenkins job allocation summary:")
+            self.logger.info(f"  Total jobs: {allocation_summary['total_jenkins_jobs']}")
+            self.logger.info(f"  Allocated: {allocation_summary['allocated_jobs']}")
+            self.logger.info(f"  Unallocated: {allocation_summary['unallocated_jobs']}")
+            self.logger.info(f"  Allocation rate: {allocation_summary['allocation_percentage']}%")
+
+            # Validate allocation and report any issues
+            validation_issues = self.git_collector.validate_jenkins_job_allocation()
+            if validation_issues:
+                self.logger.error("CRITICAL: Jenkins job allocation issues detected:")
+                for issue in validation_issues:
+                    self.logger.error(f"  - {issue}")
+
+                # Infrastructure jobs are not fatal - only log as warning
+                self.logger.warning("Some Jenkins jobs could not be allocated, but continuing with report generation")
+
+                # Get final counts for reporting
+                allocation_summary = self.git_collector.get_jenkins_job_allocation_summary()
+                orphaned_summary = self.git_collector.get_orphaned_jenkins_jobs_summary()
+
+                total_jobs = allocation_summary.get("total_jenkins_jobs", 0)
+                allocated_jobs = allocation_summary.get("allocated_jobs", 0)
+                orphaned_jobs = orphaned_summary.get("total_orphaned_jobs", 0)
+
+                self.logger.info(f"Final Jenkins job allocation: {allocated_jobs}/{total_jobs} active, {orphaned_jobs} orphaned")
+            else:
+                self.logger.info("Jenkins job allocation validation: No issues found")
+
+            # Add allocation data to report for debugging
+            report_data["jenkins_allocation"] = allocation_summary
+
+            # Add orphaned jobs data to report
+            orphaned_summary = self.git_collector.get_orphaned_jenkins_jobs_summary()
+            report_data["orphaned_jenkins_jobs"] = orphaned_summary
+            if orphaned_summary["total_orphaned_jobs"] > 0:
+                self.logger.info(f"Found {orphaned_summary['total_orphaned_jobs']} Jenkins jobs belonging to archived Gerrit projects")
+                for state, count in orphaned_summary["by_state"].items():
+                    self.logger.info(f"  - {count} jobs for {state} projects")
+
         self.logger.info(f"Analysis complete: {len(report_data['repositories'])} repositories, {len(report_data['errors'])} errors")
 
         return report_data
@@ -3997,8 +4922,10 @@ class RepositoryReporter:
         except (PermissionError, OSError) as e:
             self.logger.warning(f"Error during repository discovery: {e}")
 
-        # Deduplicate and sort results
-        unique_repos = sorted({p.resolve() for p in repo_dirs})
+        # Deduplicate and sort results by path depth (deepest first) to ensure
+        # child projects get processed before parent projects for Jenkins job allocation
+        unique_repos = list({p.resolve() for p in repo_dirs})
+        unique_repos.sort(key=lambda p: (-len(p.parts), str(p)))
 
         self.logger.info(f"Discovered {len(unique_repos)} git repositories")
         if access_errors:
