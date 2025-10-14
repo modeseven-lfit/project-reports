@@ -41,7 +41,9 @@ from urllib.parse import urljoin, urlparse
 try:
     import yaml  # type: ignore
 except ImportError:
-    print("ERROR: PyYAML is required. Install with: pip install PyYAML", file=sys.stderr)
+    print(
+        "ERROR: PyYAML is required. Install with: pip install PyYAML", file=sys.stderr
+    )
     sys.exit(1)
 
 try:
@@ -86,7 +88,10 @@ DEFAULT_TIME_WINDOWS = {
 # LOGGING SETUP
 # =============================================================================
 
-def setup_logging(level: str = "INFO", include_timestamps: bool = True) -> logging.Logger:
+
+def setup_logging(
+    level: str = "INFO", include_timestamps: bool = True
+) -> logging.Logger:
     """Configure logging with structured format."""
     log_format = "[%(levelname)s]"
     if include_timestamps:
@@ -96,15 +101,17 @@ def setup_logging(level: str = "INFO", include_timestamps: bool = True) -> loggi
     logging.basicConfig(
         level=getattr(logging, level.upper()),
         format=log_format,
-        datefmt="%Y-%m-%d %H:%M:%S UTC" if include_timestamps else None
+        datefmt="%Y-%m-%d %H:%M:%S UTC" if include_timestamps else None,
     )
 
     logger = logging.getLogger("repo_reporter")
     return logger
 
+
 # =============================================================================
 # CONFIGURATION LOADING AND DEEP MERGE
 # =============================================================================
+
 
 def deep_merge_dicts(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     """Recursively merge two dictionaries, with override taking precedence."""
@@ -118,15 +125,17 @@ def deep_merge_dicts(base: dict[str, Any], override: dict[str, Any]) -> dict[str
 
     return result
 
+
 def load_yaml_config(config_path: Path) -> Dict[str, Any]:
     """Load and parse a YAML configuration file."""
     try:
-        with open(config_path, 'r', encoding='utf-8') as f:
+        with open(config_path, "r", encoding="utf-8") as f:
             return yaml.safe_load(f) or {}
     except FileNotFoundError:
         return {}
     except yaml.YAMLError as e:
         raise ValueError(f"Invalid YAML in {config_path}: {e}")
+
 
 def load_configuration(config_dir: Path, project: str) -> dict[str, Any]:
     """
@@ -159,14 +168,17 @@ def load_configuration(config_dir: Path, project: str) -> dict[str, Any]:
 
     return merged_config
 
+
 def compute_config_digest(config: Dict[str, Any]) -> str:
     """Compute SHA256 digest of configuration for reproducibility tracking."""
-    config_json = json.dumps(config, sort_keys=True, separators=(',', ':'))
-    return hashlib.sha256(config_json.encode('utf-8')).hexdigest()
+    config_json = json.dumps(config, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(config_json.encode("utf-8")).hexdigest()
+
 
 # =============================================================================
 # TIME WINDOW COMPUTATION
 # =============================================================================
+
 
 def setup_time_windows(config: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """
@@ -192,17 +204,23 @@ def setup_time_windows(config: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
     return windows
 
+
 # =============================================================================
 # GERRIT AND JENKINS API INTEGRATION
 # =============================================================================
 
+
 class GerritAPIError(Exception):
     """Base exception for Gerrit API errors."""
+
     pass
+
 
 class GerritConnectionError(Exception):
     """Raised when connection to Gerrit server fails."""
+
     pass
+
 
 class GerritAPIDiscovery:
     """Discovers the correct Gerrit API base URL for a given host."""
@@ -248,7 +266,9 @@ class GerritAPIDiscovery:
         # First, try to follow redirects from the base URL
         redirect_path = self._discover_via_redirect(host)
         if redirect_path:
-            test_paths = [redirect_path] + [p for p in self.COMMON_PATHS if p != redirect_path]
+            test_paths = [redirect_path] + [
+                p for p in self.COMMON_PATHS if p != redirect_path
+            ]
         else:
             test_paths = self.COMMON_PATHS
 
@@ -310,10 +330,13 @@ class GerritAPIDiscovery:
         except Exception:
             return False
 
+
 class GerritAPIClient:
     """Client for interacting with Gerrit REST API."""
 
-    def __init__(self, host: str, base_url: Optional[str] = None, timeout: float = 30.0):
+    def __init__(
+        self, host: str, base_url: Optional[str] = None, timeout: float = 30.0
+    ):
         """Initialize Gerrit API client."""
         self.host = host
         self.timeout = timeout
@@ -352,7 +375,7 @@ class GerritAPIClient:
         """Get detailed information about a specific project."""
         try:
             # URL-encode the project name and use the projects API with detailed information
-            encoded_name = project_name.replace('/', '%2F')
+            encoded_name = project_name.replace("/", "%2F")
             url = f"/projects/{encoded_name}?d"
 
             response = self.client.get(url)
@@ -364,7 +387,9 @@ class GerritAPIClient:
                 logging.debug(f"Project not found in Gerrit: {project_name}")
                 return None
             else:
-                logging.warning(f"Gerrit API returned {response.status_code} for project {project_name}")
+                logging.warning(
+                    f"Gerrit API returned {response.status_code} for project {project_name}"
+                )
                 return None
 
         except Exception as e:
@@ -396,7 +421,9 @@ class GerritAPIClient:
                 logging.info(f"Fetched {len(result)} projects from Gerrit")
                 return result if isinstance(result, dict) else {}
             else:
-                logging.error(f"Failed to fetch projects list: HTTP {response.status_code}")
+                logging.error(
+                    f"Failed to fetch projects list: HTTP {response.status_code}"
+                )
                 return {}
 
         except Exception as e:
@@ -417,6 +444,7 @@ class JenkinsAPIClient:
         self._cache_populated = False
 
         import httpx
+
         self.client = httpx.Client(timeout=timeout)
 
         # Discover the correct API base path
@@ -430,7 +458,7 @@ class JenkinsAPIClient:
 
     def close(self):
         """Close the HTTP client."""
-        if hasattr(self, 'client'):
+        if hasattr(self, "client"):
             self.client.close()
 
     def _discover_api_base_path(self):
@@ -441,7 +469,7 @@ class JenkinsAPIClient:
             "/releng/api/json",
             "/jenkins/api/json",
             "/ci/api/json",
-            "/build/api/json"
+            "/build/api/json",
         ]
 
         logging.info(f"Discovering Jenkins API base path for {self.host}")
@@ -458,7 +486,9 @@ class JenkinsAPIClient:
                         if "jobs" in data and isinstance(data["jobs"], list):
                             self.api_base_path = pattern
                             job_count = len(data["jobs"])
-                            logging.info(f"Found working Jenkins API path: {pattern} ({job_count} jobs)")
+                            logging.info(
+                                f"Found working Jenkins API path: {pattern} ({job_count} jobs)"
+                            )
                             return
                     except Exception as e:
                         logging.debug(f"Invalid JSON response from {pattern}: {e}")
@@ -472,15 +502,17 @@ class JenkinsAPIClient:
 
         # If no pattern worked, default to standard path
         self.api_base_path = "/api/json"
-        logging.warning(f"Could not discover Jenkins API path for {self.host}, using default: {self.api_base_path}")
-
-
+        logging.warning(
+            f"Could not discover Jenkins API path for {self.host}, using default: {self.api_base_path}"
+        )
 
     def get_all_jobs(self) -> dict[str, Any]:
         """Get all jobs from Jenkins with caching."""
         # Return cached data if available
         if self._cache_populated and self._jobs_cache:
-            logging.debug(f"Using cached Jenkins jobs data ({len(self._jobs_cache.get('jobs', []))} jobs)")
+            logging.debug(
+                f"Using cached Jenkins jobs data ({len(self._jobs_cache.get('jobs', []))} jobs)"
+            )
             return self._jobs_cache
 
         if not self.api_base_path:
@@ -503,7 +535,9 @@ class JenkinsAPIClient:
                 self._cache_populated = True
                 return data
             else:
-                logging.warning(f"Jenkins API returned {response.status_code} for {url}")
+                logging.warning(
+                    f"Jenkins API returned {response.status_code} for {url}"
+                )
                 logging.warning(f"Response text: {response.text[:500]}")
                 return {}
 
@@ -511,19 +545,25 @@ class JenkinsAPIClient:
             logging.error(f"Exception fetching Jenkins jobs from {self.host}: {e}")
             return {}
 
-    def get_jobs_for_project(self, project_name: str, allocated_jobs: set[str]) -> list[dict[str, Any]]:
+    def get_jobs_for_project(
+        self, project_name: str, allocated_jobs: set[str]
+    ) -> list[dict[str, Any]]:
         """Get jobs related to a specific Gerrit project with duplicate prevention."""
         logging.debug(f"Looking for Jenkins jobs for project: {project_name}")
         all_jobs = self.get_all_jobs()
         project_jobs: list[dict[str, Any]] = []
 
         if "jobs" not in all_jobs:
-            logging.debug(f"No 'jobs' key found in Jenkins API response for {project_name}")
+            logging.debug(
+                f"No 'jobs' key found in Jenkins API response for {project_name}"
+            )
             return project_jobs
 
         # Convert project name to job name format (replace / with -)
         project_job_name = project_name.replace("/", "-")
-        logging.debug(f"Searching for Jenkins jobs matching pattern: {project_job_name}")
+        logging.debug(
+            f"Searching for Jenkins jobs matching pattern: {project_job_name}"
+        )
 
         total_jobs = len(all_jobs["jobs"])
         logging.debug(f"Checking {total_jobs} total Jenkins jobs for matches")
@@ -540,7 +580,9 @@ class JenkinsAPIClient:
                 continue
 
             # Calculate match score for better job attribution
-            score = self._calculate_job_match_score(job_name, project_name, project_job_name)
+            score = self._calculate_job_match_score(
+                job_name, project_name, project_job_name
+            )
             if score > 0:
                 candidates.append((job, score))
 
@@ -557,14 +599,20 @@ class JenkinsAPIClient:
                 project_jobs.append(job_details)
                 # Mark job as allocated
                 allocated_jobs.add(job_name)
-                logging.info(f"Allocated Jenkins job '{job_name}' to project '{project_name}' (score: {score})")
+                logging.info(
+                    f"Allocated Jenkins job '{job_name}' to project '{project_name}' (score: {score})"
+                )
             else:
                 logging.warning(f"Failed to get details for Jenkins job: {job_name}")
 
-        logging.info(f"Found {len(project_jobs)} Jenkins jobs for project {project_name}")
+        logging.info(
+            f"Found {len(project_jobs)} Jenkins jobs for project {project_name}"
+        )
         return project_jobs
 
-    def _calculate_job_match_score(self, job_name: str, project_name: str, project_job_name: str) -> int:
+    def _calculate_job_match_score(
+        self, job_name: str, project_name: str, project_job_name: str
+    ) -> int:
         """
         Calculate a match score for Jenkins job attribution using STRICT PREFIX MATCHING ONLY.
         This prevents duplicate allocation by ensuring jobs can only match one project.
@@ -628,7 +676,11 @@ class JenkinsAPIClient:
         """Get detailed information about a specific job."""
         try:
             # Extract base path without /api/json suffix for job URLs
-            base_path = self.api_base_path.replace('/api/json', '') if self.api_base_path else ''
+            base_path = (
+                self.api_base_path.replace("/api/json", "")
+                if self.api_base_path
+                else ""
+            )
             url = f"{self.base_url}{base_path}/job/{job_name}/api/json"
             response = self.client.get(url)
 
@@ -670,16 +722,18 @@ class JenkinsAPIClient:
                     "color": color,  # Color for consistency with workflows (may be overridden for disabled jobs)
                     "urls": {
                         "job_page": job_url,  # Jenkins job status/build page
-                        "source": None,       # No source URL available for Jenkins jobs
-                        "api": url            # API endpoint for this job
+                        "source": None,  # No source URL available for Jenkins jobs
+                        "api": url,  # API endpoint for this job
                     },
                     "buildable": buildable,
                     "disabled": disabled,  # Keep original field for reference
                     "description": job_data.get("description", ""),
-                    "last_build": last_build_info
+                    "last_build": last_build_info,
                 }
             else:
-                logging.debug(f"Jenkins job API returned {response.status_code} for {job_name}")
+                logging.debug(
+                    f"Jenkins job API returned {response.status_code} for {job_name}"
+                )
                 return {}
 
         except Exception as e:
@@ -727,9 +781,9 @@ class JenkinsAPIClient:
 
         # Map workflow states to colors
         state_color_map = {
-            'active': 'blue',      # Active workflows get blue (like successful Jenkins jobs)
-            'disabled': 'grey',    # Disabled workflows get grey
-            'deleted': 'red'       # Deleted workflows get red
+            "active": "blue",  # Active workflows get blue (like successful Jenkins jobs)
+            "disabled": "grey",  # Disabled workflows get grey
+            "deleted": "red",  # Deleted workflows get red
         }
 
         return state_color_map.get(state_lower, "grey")
@@ -752,19 +806,19 @@ class JenkinsAPIClient:
         color_lower = color.lower()
 
         # Handle animated colors (building states)
-        if color_lower.endswith('_anime'):
+        if color_lower.endswith("_anime"):
             return "building"
 
         # Map standard colors
         color_map = {
-            'blue': 'success',
-            'red': 'failure',
-            'yellow': 'unstable',
-            'grey': 'disabled',
-            'gray': 'disabled',
-            'aborted': 'aborted',
-            'notbuilt': 'not_built',
-            'disabled': 'disabled'
+            "blue": "success",
+            "red": "failure",
+            "yellow": "unstable",
+            "grey": "disabled",
+            "gray": "disabled",
+            "aborted": "aborted",
+            "notbuilt": "not_built",
+            "disabled": "disabled",
         }
 
         return color_map.get(color_lower, "unknown")
@@ -773,7 +827,11 @@ class JenkinsAPIClient:
         """Get information about the last build of a job."""
         try:
             # Extract base path without /api/json suffix for job URLs
-            base_path = self.api_base_path.replace('/api/json', '') if self.api_base_path else ''
+            base_path = (
+                self.api_base_path.replace("/api/json", "")
+                if self.api_base_path
+                else ""
+            )
             url = f"{self.base_url}{base_path}/job/{job_name}/lastBuild/api/json?tree=result,duration,timestamp,building,number"
             response = self.client.get(url)
 
@@ -784,6 +842,7 @@ class JenkinsAPIClient:
                 timestamp = build_data.get("timestamp", 0)
                 if timestamp:
                     from datetime import datetime
+
                     build_time = datetime.fromtimestamp(timestamp / 1000)
                     build_data["build_time"] = build_time.isoformat()
 
@@ -816,10 +875,20 @@ class GitHubAPIClient:
                 "Authorization": f"Bearer {token}",
                 "Accept": "application/vnd.github+json",
                 "X-GitHub-Api-Version": "2022-11-28",
-                "User-Agent": "repository-reports/1.0.0"
-            }
+                "User-Agent": "repository-reports/1.0.0",
+            },
         )
         self.logger = logging.getLogger(__name__)
+
+    def _write_to_step_summary(self, message: str) -> None:
+        """Write a message to GitHub Step Summary if running in GitHub Actions."""
+        step_summary_file = os.environ.get("GITHUB_STEP_SUMMARY")
+        if step_summary_file:
+            try:
+                with open(step_summary_file, "a") as f:
+                    f.write(message + "\n")
+            except Exception as e:
+                self.logger.debug(f"Could not write to GITHUB_STEP_SUMMARY: {e}")
 
     def get_repository_workflows(self, owner: str, repo: str) -> list[dict[str, Any]]:
         """Get all workflows for a repository."""
@@ -827,7 +896,42 @@ class GitHubAPIClient:
             url = f"/repos/{owner}/{repo}/actions/workflows"
             response = self.client.get(url)
 
-            if response.status_code == 200:
+            if response.status_code == 401:
+                error_msg = (
+                    f"❌ **GitHub API Authentication Failed** for `{owner}/{repo}`\n\n"
+                )
+                error_msg += "The GitHub token is invalid or has expired.\n\n"
+                error_msg += "**Action Required:** Update the `GITHUB_TOKEN` secret with a valid Personal Access Token.\n"
+                self.logger.error(
+                    f"GitHub API authentication failed (401) for {owner}/{repo}: {response.text}"
+                )
+                self._write_to_step_summary(error_msg)
+                return []
+            elif response.status_code == 403:
+                error_msg = (
+                    f"⚠️ **GitHub API Permission Denied** for `{owner}/{repo}`\n\n"
+                )
+                try:
+                    error_body = response.json()
+                    error_message = error_body.get("message", response.text)
+                    error_msg += f"Error: {error_message}\n\n"
+                except Exception:
+                    error_msg += f"Error: {response.text}\n\n"
+                error_msg += (
+                    "**Likely Cause:** The GitHub token lacks required permissions.\n\n"
+                )
+                error_msg += "**Required Scopes:**\n"
+                error_msg += "- `repo` (or at least `repo:status`)\n"
+                error_msg += "- `actions:read`\n\n"
+                error_msg += (
+                    "**To Fix:** Update your Personal Access Token with these scopes.\n"
+                )
+                self.logger.error(
+                    f"GitHub API permission denied (403) for {owner}/{repo}: {response.text}"
+                )
+                self._write_to_step_summary(error_msg)
+                return []
+            elif response.status_code == 200:
                 data = response.json()
                 workflows = []
 
@@ -843,19 +947,21 @@ class GitHubAPIClient:
                     workflow_state = workflow.get("state", "unknown")
                     color = self._compute_workflow_color_from_state(workflow_state)
 
-                    workflows.append({
-                        "id": workflow.get("id"),
-                        "name": workflow.get("name"),
-                        "path": workflow_path,
-                        "state": workflow_state,   # "active", "disabled", etc. (enabled/disabled state)
-                        "status": "unknown",       # Will be filled by get_workflow_runs_status (pass/fail status)
-                        "color": color,            # Add color attribute for consistency
-                        "urls": {
-                            "workflow_page": f"https://github.com/{owner}/{repo}/actions/workflows/{os.path.basename(workflow_path) if workflow_path else ''}",  # GitHub Actions page
-                            "source": source_url,                      # Source code URL
-                            "badge": workflow.get("badge_url")         # Badge URL
+                    workflows.append(
+                        {
+                            "id": workflow.get("id"),
+                            "name": workflow.get("name"),
+                            "path": workflow_path,
+                            "state": workflow_state,  # "active", "disabled", etc. (enabled/disabled state)
+                            "status": "unknown",  # Will be filled by get_workflow_runs_status (pass/fail status)
+                            "color": color,  # Add color attribute for consistency
+                            "urls": {
+                                "workflow_page": f"https://github.com/{owner}/{repo}/actions/workflows/{os.path.basename(workflow_path) if workflow_path else ''}",  # GitHub Actions page
+                                "source": source_url,  # Source code URL
+                                "badge": workflow.get("badge_url"),  # Badge URL
+                            },
                         }
-                    })
+                    )
 
                 return workflows
 
@@ -863,14 +969,18 @@ class GitHubAPIClient:
                 self.logger.debug(f"Repository {owner}/{repo} not found or no access")
                 return []
             else:
-                self.logger.warning(f"GitHub API returned {response.status_code} for workflows in {owner}/{repo}")
+                self.logger.warning(
+                    f"GitHub API returned {response.status_code} for workflows in {owner}/{repo}: {response.text}"
+                )
                 return []
 
         except Exception as e:
             self.logger.error(f"Error fetching workflows for {owner}/{repo}: {e}")
             return []
 
-    def get_workflow_runs_status(self, owner: str, repo: str, workflow_id: int, limit: int = 10) -> dict[str, Any]:
+    def get_workflow_runs_status(
+        self, owner: str, repo: str, workflow_id: int, limit: int = 10
+    ) -> dict[str, Any]:
         """Get recent workflow runs for a specific workflow to determine status."""
         try:
             url = f"/repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs"
@@ -878,7 +988,17 @@ class GitHubAPIClient:
 
             response = self.client.get(url, params=params)
 
-            if response.status_code == 200:
+            if response.status_code == 401:
+                self.logger.error(
+                    f"GitHub API authentication failed (401) for workflow {workflow_id} in {owner}/{repo}"
+                )
+                return {"status": "auth_error", "last_run": None}
+            elif response.status_code == 403:
+                self.logger.error(
+                    f"GitHub API permission denied (403) for workflow {workflow_id} in {owner}/{repo}: {response.text}"
+                )
+                return {"status": "permission_error", "last_run": None}
+            elif response.status_code == 200:
                 data = response.json()
                 runs = data.get("workflow_runs", [])
 
@@ -891,12 +1011,14 @@ class GitHubAPIClient:
                 # Compute standardized status from conclusion and run status
                 conclusion = latest_run.get("conclusion", "unknown")
                 run_status = latest_run.get("status", "unknown")
-                standardized_status = self._compute_workflow_status(conclusion, run_status)
+                standardized_status = self._compute_workflow_status(
+                    conclusion, run_status
+                )
 
                 return {
                     "status": standardized_status,  # Standardized status
-                    "conclusion": conclusion,       # Keep original for compatibility
-                    "run_status": run_status,       # Keep original for compatibility
+                    "conclusion": conclusion,  # Keep original for compatibility
+                    "run_status": run_status,  # Keep original for compatibility
                     "last_run": {
                         "id": latest_run.get("id"),
                         "number": latest_run.get("run_number"),
@@ -904,15 +1026,21 @@ class GitHubAPIClient:
                         "updated_at": latest_run.get("updated_at"),
                         "html_url": latest_run.get("html_url"),
                         "head_branch": latest_run.get("head_branch"),
-                        "head_sha": latest_run.get("head_sha")[:7] if latest_run.get("head_sha") else None
-                    }
+                        "head_sha": latest_run.get("head_sha")[:7]
+                        if latest_run.get("head_sha")
+                        else None,
+                    },
                 }
             else:
-                self.logger.warning(f"GitHub API returned {response.status_code} for workflow {workflow_id} runs")
+                self.logger.warning(
+                    f"GitHub API returned {response.status_code} for workflow {workflow_id} runs: {response.text}"
+                )
                 return {"status": "api_error", "last_run": None}
 
         except Exception as e:
-            self.logger.error(f"Error fetching workflow runs for {owner}/{repo}/workflows/{workflow_id}: {e}")
+            self.logger.error(
+                f"Error fetching workflow runs for {owner}/{repo}/workflows/{workflow_id}: {e}"
+            )
             return {"status": "error", "last_run": None}
 
     def _compute_workflow_color_from_runtime_status(self, status: str) -> str:
@@ -932,15 +1060,15 @@ class GitHubAPIClient:
 
         # Map runtime statuses to colors (matching Jenkins scheme)
         status_color_map = {
-            'success': 'blue',         # Success = blue (like Jenkins)
-            'failure': 'red',          # Failure = red
-            'building': 'blue_anime',  # Building = animated blue
-            'in_progress': 'blue_anime', # In progress = animated blue
-            'cancelled': 'grey',       # Cancelled = grey
-            'skipped': 'grey',         # Skipped = grey
-            'unknown': 'grey',         # Unknown = grey
-            'error': 'red',            # Error = red
-            'no_runs': 'grey'          # No runs = grey
+            "success": "blue",  # Success = blue (like Jenkins)
+            "failure": "red",  # Failure = red
+            "building": "blue_anime",  # Building = animated blue
+            "in_progress": "blue_anime",  # In progress = animated blue
+            "cancelled": "grey",  # Cancelled = grey
+            "skipped": "grey",  # Skipped = grey
+            "unknown": "grey",  # Unknown = grey
+            "error": "red",  # Error = red
+            "no_runs": "grey",  # No runs = grey
         }
 
         return status_color_map.get(status_lower, "grey")
@@ -968,13 +1096,15 @@ class GitHubAPIClient:
                 "cancelled": "cancelled",
                 "skipped": "skipped",
                 "timed_out": "failure",
-                "action_required": "failure"
+                "action_required": "failure",
             }
             return conclusion_map.get(conclusion, "unknown")
 
         return "unknown"
 
-    def get_repository_workflow_status_summary(self, owner: str, repo: str) -> dict[str, Any]:
+    def get_repository_workflow_status_summary(
+        self, owner: str, repo: str
+    ) -> dict[str, Any]:
         """Get comprehensive workflow status summary for a repository."""
         workflows = self.get_repository_workflows(owner, repo)
 
@@ -984,7 +1114,7 @@ class GitHubAPIClient:
                 "workflows": [],
                 "overall_status": "no_workflows",
                 "github_owner": owner,
-                "github_repo": repo
+                "github_repo": repo,
             }
 
         workflow_statuses = []
@@ -996,19 +1126,22 @@ class GitHubAPIClient:
                 status_info = self.get_workflow_runs_status(owner, repo, workflow_id)
 
                 # Merge workflow info with status info, ensuring standardized structure
-                merged_workflow = {
-                    **workflow,
-                    **status_info
-                }
+                merged_workflow = {**workflow, **status_info}
 
                 # Update URLs with source URL if not already present
                 if "urls" in merged_workflow and workflow.get("path"):
                     if not merged_workflow["urls"].get("source"):
-                        merged_workflow["urls"]["source"] = f"https://github.com/{owner}/{repo}/blob/master/{workflow['path']}"
+                        merged_workflow["urls"]["source"] = (
+                            f"https://github.com/{owner}/{repo}/blob/master/{workflow['path']}"
+                        )
 
                 # Update color based on runtime status if available
                 if "status" in status_info and status_info["status"]:
-                    merged_workflow["color"] = self._compute_workflow_color_from_runtime_status(status_info["status"])
+                    merged_workflow["color"] = (
+                        self._compute_workflow_color_from_runtime_status(
+                            status_info["status"]
+                        )
+                    )
 
                 workflow_statuses.append(merged_workflow)
 
@@ -1031,7 +1164,7 @@ class GitHubAPIClient:
             "workflows": workflow_statuses,
             "overall_status": overall_status,
             "github_owner": owner,
-            "github_repo": repo
+            "github_repo": repo,
         }
 
     def _compute_workflow_color_from_state(self, state: str) -> str:
@@ -1051,9 +1184,9 @@ class GitHubAPIClient:
 
         # Map workflow states to colors
         state_color_map = {
-            'active': 'blue',      # Active workflows get blue (like successful Jenkins jobs)
-            'disabled': 'grey',    # Disabled workflows get grey
-            'deleted': 'red'       # Deleted workflows get red
+            "active": "blue",  # Active workflows get blue (like successful Jenkins jobs)
+            "disabled": "grey",  # Disabled workflows get grey
+            "deleted": "red",  # Deleted workflows get red
         }
 
         return state_color_map.get(state_lower, "grey")
@@ -1063,31 +1196,47 @@ class GitHubAPIClient:
 # GIT DATA COLLECTION (Phase 2 - TODO)
 # =============================================================================
 
+
 class GitDataCollector:
     """Handles Git repository analysis and metric collection."""
 
-    def __init__(self, config: dict[str, Any], time_windows: dict[str, dict[str, Any]], logger: logging.Logger) -> None:
+    def __init__(
+        self,
+        config: dict[str, Any],
+        time_windows: dict[str, dict[str, Any]],
+        logger: logging.Logger,
+    ) -> None:
         self.config = config
         self.time_windows = time_windows
         self.logger = logger
         self.cache_enabled = config.get("performance", {}).get("cache", False)
         self.cache_dir = None
-        self.repos_path: Optional[Path] = None  # Will be set later for relative path calculation
+        self.repos_path: Optional[Path] = (
+            None  # Will be set later for relative path calculation
+        )
         if self.cache_enabled:
             self.cache_dir = Path(tempfile.gettempdir()) / "repo_reporting_cache"
             self.cache_dir.mkdir(exist_ok=True)
 
         # Initialize Gerrit API client if configured
         self.gerrit_client = None
-        self.gerrit_projects_cache: dict[str, dict[str, Any]] = {}  # Cache for all Gerrit project data
+        self.gerrit_projects_cache: dict[
+            str, dict[str, Any]
+        ] = {}  # Cache for all Gerrit project data
         gerrit_config = self.config.get("gerrit", {})
 
         # Initialize Jenkins API client if configured
         self.jenkins_client = None
-        self.jenkins_jobs_cache: dict[str, list[dict[str, Any]]] = {}  # Cache for Jenkins job data
-        self.allocated_jenkins_jobs: set[str] = set()  # Track allocated jobs to prevent duplicates
+        self.jenkins_jobs_cache: dict[
+            str, list[dict[str, Any]]
+        ] = {}  # Cache for Jenkins job data
+        self.allocated_jenkins_jobs: set[str] = (
+            set()
+        )  # Track allocated jobs to prevent duplicates
         self.all_jenkins_jobs: dict[str, Any] = {}  # Cache all jobs fetched once
-        self.orphaned_jenkins_jobs: dict[str, dict[str, Any]] = {}  # Track jobs from archived projects
+        self.orphaned_jenkins_jobs: dict[
+            str, dict[str, Any]
+        ] = {}  # Track jobs from archived projects
         self._jenkins_initialized = False
 
         # Check for Jenkins host from environment variable
@@ -1106,7 +1255,9 @@ class GitDataCollector:
                     # Fetch all project data upfront
                     self._fetch_all_gerrit_projects()
                 except Exception as e:
-                    self.logger.error(f"Failed to initialize Gerrit API client for {host}: {e}")
+                    self.logger.error(
+                        f"Failed to initialize Gerrit API client for {host}: {e}"
+                    )
             else:
                 self.logger.error("Gerrit enabled but no host configured")
 
@@ -1116,11 +1267,15 @@ class GitDataCollector:
             timeout = jenkins_config.get("timeout", 30.0)
             try:
                 self.jenkins_client = JenkinsAPIClient(jenkins_host, timeout)
-                self.logger.info(f"Initialized Jenkins API client for {jenkins_host} (from environment)")
+                self.logger.info(
+                    f"Initialized Jenkins API client for {jenkins_host} (from environment)"
+                )
                 # Test the connection and cache all jobs upfront
                 self._initialize_jenkins_cache()
             except Exception as e:
-                self.logger.error(f"Failed to initialize Jenkins API client for {jenkins_host}: {e}")
+                self.logger.error(
+                    f"Failed to initialize Jenkins API client for {jenkins_host}: {e}"
+                )
                 self.jenkins_client = None
         elif jenkins_config.get("enabled", False):
             # Fallback to config file (for backward compatibility)
@@ -1130,11 +1285,15 @@ class GitDataCollector:
             if host:
                 try:
                     self.jenkins_client = JenkinsAPIClient(host, timeout)
-                    self.logger.info(f"Initialized Jenkins API client for {host} (from config)")
+                    self.logger.info(
+                        f"Initialized Jenkins API client for {host} (from config)"
+                    )
                     # Initialize cache for config-based Jenkins client too
                     self._initialize_jenkins_cache()
                 except Exception as e:
-                    self.logger.error(f"Failed to initialize Jenkins API client for {host}: {e}")
+                    self.logger.error(
+                        f"Failed to initialize Jenkins API client for {host}: {e}"
+                    )
             else:
                 self.logger.error("Jenkins enabled but no host configured")
 
@@ -1147,7 +1306,9 @@ class GitDataCollector:
             self.logger.info("Caching all Jenkins jobs for efficient allocation...")
             self.all_jenkins_jobs = self.jenkins_client.get_all_jobs()
             job_count = len(self.all_jenkins_jobs.get("jobs", []))
-            self.logger.info(f"Jenkins cache initialized: {job_count} total jobs available")
+            self.logger.info(
+                f"Jenkins cache initialized: {job_count} total jobs available"
+            )
             self._jenkins_initialized = True
         except Exception as e:
             self.logger.error(f"Failed to initialize Jenkins cache: {e}")
@@ -1185,55 +1346,67 @@ class GitDataCollector:
 
             # Strategy 1: Look for gerrit-repos-* directory pattern
             for i, part in enumerate(path_parts):
-                if part.startswith('gerrit-repos-'):
+                if part.startswith("gerrit-repos-"):
                     if i < len(path_parts) - 1:
-                        project_path_parts = path_parts[i + 1:]
-                        gerrit_project = '/'.join(project_path_parts)
-                        self.logger.debug(f"Extracted Gerrit project from gerrit-repos pattern: {gerrit_project}")
+                        project_path_parts = path_parts[i + 1 :]
+                        gerrit_project = "/".join(project_path_parts)
+                        self.logger.debug(
+                            f"Extracted Gerrit project from gerrit-repos pattern: {gerrit_project}"
+                        )
                         return gerrit_project
                     break
 
             # Strategy 2: Look for hostname pattern (gerrit.domain.tld)
             for i, part in enumerate(path_parts):
-                if '.' in part and any(tld in part for tld in ['.org', '.com', '.net', '.io']):
+                if "." in part and any(
+                    tld in part for tld in [".org", ".com", ".net", ".io"]
+                ):
                     if i < len(path_parts) - 1:
-                        project_path_parts = path_parts[i + 1:]
-                        gerrit_project = '/'.join(project_path_parts)
-                        self.logger.debug(f"Extracted Gerrit project from hostname pattern: {gerrit_project}")
+                        project_path_parts = path_parts[i + 1 :]
+                        gerrit_project = "/".join(project_path_parts)
+                        self.logger.debug(
+                            f"Extracted Gerrit project from hostname pattern: {gerrit_project}"
+                        )
                         return gerrit_project
                     break
 
             # Strategy 3: Look for organization root directories and extract relative path
             # Common organization names in paths
-            org_names = ['onap', 'o-ran-sc', 'opendaylight', 'fdio', 'opnfv', 'agl']
+            org_names = ["onap", "o-ran-sc", "opendaylight", "fdio", "opnfv", "agl"]
 
             for i, part in enumerate(path_parts):
                 if part.lower() in org_names:
                     # Found organization root, extract everything after it
                     if i < len(path_parts) - 1:
-                        project_path_parts = path_parts[i + 1:]
-                        gerrit_project = '/'.join(project_path_parts)
-                        self.logger.debug(f"Extracted Gerrit project from organization root '{part}': {gerrit_project}")
+                        project_path_parts = path_parts[i + 1 :]
+                        gerrit_project = "/".join(project_path_parts)
+                        self.logger.debug(
+                            f"Extracted Gerrit project from organization root '{part}': {gerrit_project}"
+                        )
                         return gerrit_project
                     break
 
             # Strategy 4: Check if any parent directories suggest hierarchical structure
             # Look for common Gerrit project patterns (2+ levels deep)
             # Filter out root directory from path_parts
-            meaningful_parts = [part for part in path_parts if part and part != '/']
+            meaningful_parts = [part for part in path_parts if part and part != "/"]
             if len(meaningful_parts) >= 3:
                 # Take last 2-4 path components as potential project hierarchy
                 for depth in range(4, 1, -1):  # Try 4, 3, 2 components
                     if len(meaningful_parts) >= depth:
-                        potential_project = '/'.join(meaningful_parts[-depth:])
+                        potential_project = "/".join(meaningful_parts[-depth:])
                         # Validate it looks_project
 
             # Fallback: use just the repository folder name
-            self.logger.debug(f"No hierarchical structure detected, using folder name: {repo_path.name}")
+            self.logger.debug(
+                f"No hierarchical structure detected, using folder name: {repo_path.name}"
+            )
             return repo_path.name
 
         except Exception as e:
-            self.logger.warning(f"Error extracting Gerrit project from {repo_path}: {e}")
+            self.logger.warning(
+                f"Error extracting Gerrit project from {repo_path}: {e}"
+            )
             return repo_path.name
 
     def _derive_gerrit_url(self, repo_path: Path) -> str:
@@ -1248,10 +1421,12 @@ class GitDataCollector:
 
             # Look for hostname pattern and construct URL-style path
             for i, part in enumerate(path_parts):
-                if '.' in part and any(tld in part for tld in ['.org', '.com', '.net', '.io']):
+                if "." in part and any(
+                    tld in part for tld in [".org", ".com", ".net", ".io"]
+                ):
                     hostname = part
                     if i < len(path_parts) - 1:
-                        project_parts = path_parts[i + 1:]
+                        project_parts = path_parts[i + 1 :]
                         gerrit_url = f"{hostname}/{'/'.join(project_parts)}"
                         self.logger.debug(f"Derived Gerrit URL: {gerrit_url}")
                         return gerrit_url
@@ -1261,7 +1436,9 @@ class GitDataCollector:
             # Fallback: construct generic URL with repo name only (avoid recursive issues)
             repo_name = repo_path.name
             fallback_url = f"unknown-gerrit-host/{repo_name}"
-            self.logger.warning(f"Could not detect Gerrit hostname, using fallback: {fallback_url}")
+            self.logger.warning(
+                f"Could not detect Gerrit hostname, using fallback: {fallback_url}"
+            )
             return fallback_url
 
         except Exception as e:
@@ -1273,18 +1450,18 @@ class GitDataCollector:
         try:
             path_parts = repo_path.parts
             for part in path_parts:
-                if '.' in part and any(tld in part for tld in ['.org', '.com', '.net', '.io']):
+                if "." in part and any(
+                    tld in part for tld in [".org", ".com", ".net", ".io"]
+                ):
                     return part
             return "unknown-gerrit-host"
         except Exception as e:
             self.logger.warning(f"Error extracting Gerrit host from {repo_path}: {e}")
             return "unknown-gerrit-host"
 
-
-
     def __del__(self):
         """Cleanup Gerrit client when GitDataCollector is destroyed."""
-        if hasattr(self, 'gerrit_client') and self.gerrit_client:
+        if hasattr(self, "gerrit_client") and self.gerrit_client:
             try:
                 self.gerrit_client.close()
             except Exception:
@@ -1307,7 +1484,9 @@ class GitDataCollector:
         gerrit_host = self._extract_gerrit_host(repo_path)
         gerrit_url = self._derive_gerrit_url(repo_path)
 
-        self.logger.debug(f"Collecting Git metrics for Gerrit project: {gerrit_project}")
+        self.logger.debug(
+            f"Collecting Git metrics for Gerrit project: {gerrit_project}"
+        )
 
         # Initialize metrics structure with Gerrit-centric model
         metrics: Dict[str, Any] = {
@@ -1316,19 +1495,21 @@ class GitDataCollector:
                 "gerrit_host": gerrit_host,
                 "gerrit_url": gerrit_url,
                 "local_path": str(repo_path),  # Secondary, for internal use
-
                 "last_commit_timestamp": None,
                 "days_since_last_commit": None,
                 "activity_status": "inactive",  # "current", "active", or "inactive"
                 "has_any_commits": False,  # Track if repo has ANY commits (regardless of time windows)
-                "total_commits_ever": 0,   # Total commits across all history
+                "total_commits_ever": 0,  # Total commits across all history
                 "commit_counts": {window: 0 for window in self.time_windows},
-                "loc_stats": {window: {"added": 0, "removed": 0, "net": 0} for window in self.time_windows},
+                "loc_stats": {
+                    window: {"added": 0, "removed": 0, "net": 0}
+                    for window in self.time_windows
+                },
                 "unique_contributors": {window: set() for window in self.time_windows},  # type: ignore
                 "features": {},
             },
             "authors": {},  # email -> author metrics
-            "errors": []  # List[str]
+            "errors": [],  # List[str]
         }
 
         try:
@@ -1348,7 +1529,11 @@ class GitDataCollector:
 
             # Get git log with numstat in a single command
             git_command = [
-                "git", "log", "--numstat", "--date=iso", "--pretty=format:%H|%ad|%an|%ae|%s"
+                "git",
+                "log",
+                "--numstat",
+                "--date=iso",
+                "--pretty=format:%H|%ad|%an|%ae|%s",
             ]
 
             # NOTE: Removed max_history_years filtering to ensure all commit data is captured
@@ -1388,14 +1573,16 @@ class GitDataCollector:
                         enriched_jobs.append(job)
                     else:
                         # Fallback for jobs missing status (shouldn't happen with new structure)
-                        enriched_job = dict(job) if isinstance(job, dict) else {"name": str(job)}
+                        enriched_job = (
+                            dict(job) if isinstance(job, dict) else {"name": str(job)}
+                        )
                         enriched_job["status"] = "unknown"
                         enriched_jobs.append(enriched_job)
 
                 repo_data["jenkins"] = {
                     "jobs": enriched_jobs,
                     "job_count": len(enriched_jobs),
-                    "has_jobs": len(enriched_jobs) > 0
+                    "has_jobs": len(enriched_jobs) > 0,
                 }
             unique_contributors = repo_data["unique_contributors"]
             for window in self.time_windows:
@@ -1403,7 +1590,9 @@ class GitDataCollector:
                 assert isinstance(contributor_set, set)
                 unique_contributors[window] = len(contributor_set)
 
-            self.logger.debug(f"Collected {len(commits_data)} commits for {gerrit_project}")
+            self.logger.debug(
+                f"Collected {len(commits_data)} commits for {gerrit_project}"
+            )
 
             # Save to cache if enabled
             if self.cache_enabled:
@@ -1421,7 +1610,9 @@ class GitDataCollector:
     def _get_jenkins_jobs_for_repo(self, repo_name: str) -> list[dict[str, Any]]:
         """Get Jenkins jobs for a specific repository with duplicate prevention."""
         if not self.jenkins_client or not self._jenkins_initialized:
-            self.logger.debug(f"No Jenkins client available or cache not initialized for {repo_name}")
+            self.logger.debug(
+                f"No Jenkins client available or cache not initialized for {repo_name}"
+            )
             return []
 
         # Use cached data instead of making API calls
@@ -1430,9 +1621,13 @@ class GitDataCollector:
             return self.jenkins_jobs_cache[repo_name]
 
         try:
-            jobs = self.jenkins_client.get_jobs_for_project(repo_name, self.allocated_jenkins_jobs)
+            jobs = self.jenkins_client.get_jobs_for_project(
+                repo_name, self.allocated_jenkins_jobs
+            )
             if jobs:
-                self.logger.debug(f"Found {len(jobs)} Jenkins jobs for {repo_name}: {[job.get('name') for job in jobs]}")
+                self.logger.debug(
+                    f"Found {len(jobs)} Jenkins jobs for {repo_name}: {[job.get('name') for job in jobs]}"
+                )
                 # Cache the results
                 self.jenkins_jobs_cache[repo_name] = jobs
             else:
@@ -1466,7 +1661,9 @@ class GitDataCollector:
             "allocated_jobs": allocated_count,
             "unallocated_jobs": unallocated_count,
             "allocated_job_names": sorted(list(self.allocated_jenkins_jobs)),
-            "allocation_percentage": round((allocated_count / total_jobs * 100), 2) if total_jobs > 0 else 0
+            "allocation_percentage": round((allocated_count / total_jobs * 100), 2)
+            if total_jobs > 0
+            else 0,
         }
 
     def validate_jenkins_job_allocation(self) -> list[str]:
@@ -1485,7 +1682,9 @@ class GitDataCollector:
 
         if allocation_summary["unallocated_jobs"] > 0:
             # Use cached data
-            all_job_names = {job.get("name", "") for job in self.all_jenkins_jobs.get("jobs", [])}
+            all_job_names = {
+                job.get("name", "") for job in self.all_jenkins_jobs.get("jobs", [])
+            }
             unallocated_jobs = all_job_names - self.allocated_jenkins_jobs
 
             # Try to match unallocated jobs to archived Gerrit projects
@@ -1493,8 +1692,16 @@ class GitDataCollector:
 
             # Identify infrastructure jobs that legitimately don't belong to projects
             infrastructure_patterns = [
-                'lab-', 'lf-', 'openci-', 'rtdv3-', 'global-jjb-', 'ci-management-',
-                'releng-', 'autorelease-', 'docs-', 'infra-'
+                "lab-",
+                "lf-",
+                "openci-",
+                "rtdv3-",
+                "global-jjb-",
+                "ci-management-",
+                "releng-",
+                "autorelease-",
+                "docs-",
+                "infra-",
             ]
 
             # After orphaned job detection, recalculate what's truly unallocated
@@ -1506,7 +1713,9 @@ class GitDataCollector:
 
             for job in remaining_unallocated:
                 job_lower = job.lower()
-                is_infrastructure = any(job_lower.startswith(pattern) for pattern in infrastructure_patterns)
+                is_infrastructure = any(
+                    job_lower.startswith(pattern) for pattern in infrastructure_patterns
+                )
                 if is_infrastructure:
                     infrastructure_jobs.add(job)
                 else:
@@ -1515,45 +1724,57 @@ class GitDataCollector:
             # Report orphaned jobs as informational (matched to archived projects)
             if orphaned_job_names:
                 orphaned_jobs_list = sorted(list(orphaned_job_names))
-                issues.append(f"INFO: Found {len(orphaned_job_names)} Jenkins jobs matched to archived/read-only Gerrit projects")
+                issues.append(
+                    f"INFO: Found {len(orphaned_job_names)} Jenkins jobs matched to archived/read-only Gerrit projects"
+                )
                 issues.append(f"Orphaned jobs: {orphaned_jobs_list}")
 
                 # Group by project state
                 by_state: dict[str, list[str]] = {}
                 for job_name in orphaned_job_names:
                     job_info = self.orphaned_jenkins_jobs[job_name]
-                    state = job_info.get('state', 'UNKNOWN')
+                    state = job_info.get("state", "UNKNOWN")
                     if state not in by_state:
                         by_state[state] = []
                     by_state[state].append(job_name)
 
                 for state, jobs in by_state.items():
-                    issues.append(f"  - {len(jobs)} jobs for {state} projects: {sorted(jobs)}")
+                    issues.append(
+                        f"  - {len(jobs)} jobs for {state} projects: {sorted(jobs)}"
+                    )
 
             # Only report remaining project jobs as critical errors
             if project_jobs:
                 project_jobs_list = sorted(list(project_jobs))
-                issues.append(f"CRITICAL ERROR: Found {len(project_jobs)} unallocated project Jenkins jobs")
+                issues.append(
+                    f"CRITICAL ERROR: Found {len(project_jobs)} unallocated project Jenkins jobs"
+                )
                 issues.append(f"Unallocated project jobs: {project_jobs_list}")
 
                 # Analyze patterns in project jobs only
                 patterns: dict[str, int] = {}
                 for job in project_jobs:
-                    parts = job.lower().split('-')
+                    parts = job.lower().split("-")
                     if parts:
                         first_part = parts[0]
                         patterns[first_part] = patterns.get(first_part, 0) + 1
 
                 if patterns:
-                    common_patterns = sorted(patterns.items(), key=lambda x: x[1], reverse=True)[:5]
-                    issues.append(f"Common patterns in unallocated project jobs: {common_patterns}")
+                    common_patterns = sorted(
+                        patterns.items(), key=lambda x: x[1], reverse=True
+                    )[:5]
+                    issues.append(
+                        f"Common patterns in unallocated project jobs: {common_patterns}"
+                    )
 
                 # Generate detailed suggestions for fixing unallocated project jobs
                 suggestions = []
                 for job in sorted(project_jobs)[:20]:  # Analyze first 20
-                    job_parts = job.lower().split('-')
+                    job_parts = job.lower().split("-")
                     if job_parts:
-                        suggestions.append(f"  - '{job}' might belong to project containing '{job_parts[0]}'")
+                        suggestions.append(
+                            f"  - '{job}' might belong to project containing '{job_parts[0]}'"
+                        )
 
                 if suggestions:
                     issues.append("Suggestions for unallocated project jobs:")
@@ -1562,29 +1783,39 @@ class GitDataCollector:
             # Log infrastructure jobs as informational
             if infrastructure_jobs:
                 infrastructure_jobs_list = sorted(list(infrastructure_jobs))
-                issues.append(f"INFO: Found {len(infrastructure_jobs)} infrastructure Jenkins jobs (not assigned to projects)")
+                issues.append(
+                    f"INFO: Found {len(infrastructure_jobs)} infrastructure Jenkins jobs (not assigned to projects)"
+                )
                 issues.append(f"Infrastructure jobs: {infrastructure_jobs_list}")
 
         return issues
 
-    def _allocate_orphaned_jobs_to_archived_projects(self, unallocated_jobs: set[str]) -> None:
+    def _allocate_orphaned_jobs_to_archived_projects(
+        self, unallocated_jobs: set[str]
+    ) -> None:
         """Try to match unallocated Jenkins jobs to archived/read-only Gerrit projects."""
         if not self.gerrit_projects_cache or not unallocated_jobs:
             return
 
-        self.logger.info(f"Attempting to match {len(unallocated_jobs)} unallocated Jenkins jobs to archived Gerrit projects")
+        self.logger.info(
+            f"Attempting to match {len(unallocated_jobs)} unallocated Jenkins jobs to archived Gerrit projects"
+        )
 
         # Get all archived/read-only projects
         archived_projects = {}
         for project_name, project_info in self.gerrit_projects_cache.items():
-            state = project_info.get('state', 'ACTIVE')
-            if state in ['READ_ONLY', 'HIDDEN']:
+            state = project_info.get("state", "ACTIVE")
+            if state in ["READ_ONLY", "HIDDEN"]:
                 archived_projects[project_name] = project_info
 
-        self.logger.debug(f"Found {len(archived_projects)} archived/read-only projects in Gerrit")
+        self.logger.debug(
+            f"Found {len(archived_projects)} archived/read-only projects in Gerrit"
+        )
 
         # Try to match jobs to archived projects using same logic as active projects
-        for job_name in list(unallocated_jobs):  # Use list() to avoid modification during iteration
+        for job_name in list(
+            unallocated_jobs
+        ):  # Use list() to avoid modification during iteration
             best_match = None
             best_score = 0
 
@@ -1592,7 +1823,9 @@ class GitDataCollector:
                 project_job_name = project_name.replace("/", "-")
                 # Check if jenkins_client is available
                 if self.jenkins_client:
-                    score = self.jenkins_client._calculate_job_match_score(job_name, project_name, project_job_name)
+                    score = self.jenkins_client._calculate_job_match_score(
+                        job_name, project_name, project_job_name
+                    )
                 else:
                     # Fallback to simple matching if no Jenkins client
                     score = 100 if job_name.startswith(project_job_name) else 0
@@ -1604,24 +1837,22 @@ class GitDataCollector:
             if best_match and best_score > 0:
                 project_name, project_info = best_match
                 self.orphaned_jenkins_jobs[job_name] = {
-                    'project_name': project_name,
-                    'state': project_info.get('state', 'UNKNOWN'),
-                    'score': best_score
+                    "project_name": project_name,
+                    "state": project_info.get("state", "UNKNOWN"),
+                    "score": best_score,
                 }
-                self.logger.info(f"Matched orphaned job '{job_name}' to archived project '{project_name}' (state: {project_info.get('state')}, score: {best_score})")
+                self.logger.info(
+                    f"Matched orphaned job '{job_name}' to archived project '{project_name}' (state: {project_info.get('state')}, score: {best_score})"
+                )
 
     def get_orphaned_jenkins_jobs_summary(self) -> dict[str, Any]:
         """Get summary of Jenkins jobs matched to archived projects."""
         if not self.orphaned_jenkins_jobs:
-            return {
-                "total_orphaned_jobs": 0,
-                "by_state": {},
-                "jobs": {}
-            }
+            return {"total_orphaned_jobs": 0, "by_state": {}, "jobs": {}}
 
         by_state: dict[str, list[str]] = {}
         for job_name, job_info in self.orphaned_jenkins_jobs.items():
-            state = job_info.get('state', 'UNKNOWN')
+            state = job_info.get("state", "UNKNOWN")
             if state not in by_state:
                 by_state[state] = []
             by_state[state].append(job_name)
@@ -1629,10 +1860,14 @@ class GitDataCollector:
         return {
             "total_orphaned_jobs": len(self.orphaned_jenkins_jobs),
             "by_state": {state: len(jobs) for state, jobs in by_state.items()},
-            "jobs": dict(self.orphaned_jenkins_jobs)
+            "jobs": dict(self.orphaned_jenkins_jobs),
         }
 
-    def bucket_commit_into_windows(self, commit_datetime: datetime.datetime, time_windows: dict[str, dict[str, Any]]) -> List[str]:
+    def bucket_commit_into_windows(
+        self,
+        commit_datetime: datetime.datetime,
+        time_windows: dict[str, dict[str, Any]],
+    ) -> List[str]:
         """
         Determine which time windows a commit falls into.
 
@@ -1664,42 +1899,48 @@ class GitDataCollector:
             return full_domain
 
         # Load domain configuration (with caching)
-        if not hasattr(self, '_domain_config'):
+        if not hasattr(self, "_domain_config"):
             self._domain_config = self._load_domain_config()
 
         # Check if domain should be preserved in full
-        if full_domain in self._domain_config.get('preserve_full_domain', []):
+        if full_domain in self._domain_config.get("preserve_full_domain", []):
             return full_domain
 
         # Check for custom mappings
-        custom_mappings = self._domain_config.get('custom_mappings', {})
+        custom_mappings = self._domain_config.get("custom_mappings", {})
         if full_domain in custom_mappings:
             return custom_mappings[full_domain]
 
         # Split domain into parts
-        parts = full_domain.split('.')
+        parts = full_domain.split(".")
 
         # If 2 or fewer parts, return as-is
         if len(parts) <= 2:
             return full_domain
 
         # Return last two parts
-        return '.'.join(parts[-2:])
+        return ".".join(parts[-2:])
 
     def _load_domain_config(self) -> dict:
         """Load organizational domain configuration from YAML file."""
         import os
         import yaml
 
-        config_path = os.path.join(os.path.dirname(__file__), 'configuration', 'organizational_domains.yaml')
+        config_path = os.path.join(
+            os.path.dirname(__file__), "configuration", "organizational_domains.yaml"
+        )
 
         try:
-            with open(config_path, 'r', encoding='utf-8') as f:
+            with open(config_path, "r", encoding="utf-8") as f:
                 config = yaml.safe_load(f) or {}
-                self.logger.debug(f"Loaded organizational domain config from {config_path}")
+                self.logger.debug(
+                    f"Loaded organizational domain config from {config_path}"
+                )
                 return config
         except FileNotFoundError:
-            self.logger.warning(f"Organizational domain config file not found: {config_path}")
+            self.logger.warning(
+                f"Organizational domain config file not found: {config_path}"
+            )
             return {}
         except Exception as e:
             self.logger.error(f"Error loading organizational domain config: {e}")
@@ -1720,7 +1961,9 @@ class GitDataCollector:
 
         # Handle empty or malformed emails
         if not clean_email or "@" not in clean_email:
-            unknown_placeholder = self.config.get("data_quality", {}).get("unknown_email_placeholder", "unknown@unknown")
+            unknown_placeholder = self.config.get("data_quality", {}).get(
+                "unknown_email_placeholder", "unknown@unknown"
+            )
             clean_email = unknown_placeholder
 
         normalized = {
@@ -1744,14 +1987,16 @@ class GitDataCollector:
 
         return (normalized["name"], normalized["email"])
 
-    def _parse_git_log_output(self, git_output: str, repo_name: str) -> List[Dict[str, Any]]:
+    def _parse_git_log_output(
+        self, git_output: str, repo_name: str
+    ) -> List[Dict[str, Any]]:
         """
         Parse git log output into structured commit data.
 
         Expected format from git log --numstat --date=iso --pretty=format:%H|%ad|%an|%ae|%s
         """
         commits = []
-        lines = git_output.strip().split('\n')
+        lines = git_output.strip().split("\n")
         current_commit = None
 
         for line in lines:
@@ -1760,19 +2005,23 @@ class GitDataCollector:
                 continue
 
             # Check if this is a commit header line (contains |)
-            if '|' in line and len(line.split('|')) >= 5:
+            if "|" in line and len(line.split("|")) >= 5:
                 # Save previous commit if exists
                 if current_commit:
                     commits.append(current_commit)
 
                 # Parse commit header: hash|date|author_name|author_email|subject
-                parts = line.split('|', 4)
+                parts = line.split("|", 4)
                 try:
-                    commit_date = datetime.datetime.fromisoformat(parts[1].replace(' ', 'T'))
+                    commit_date = datetime.datetime.fromisoformat(
+                        parts[1].replace(" ", "T")
+                    )
                     if commit_date.tzinfo is None:
                         commit_date = commit_date.replace(tzinfo=datetime.timezone.utc)
                 except (ValueError, IndexError):
-                    self.logger.warning(f"Invalid date format in {repo_name}: {parts[1] if len(parts) > 1 else 'unknown'}")
+                    self.logger.warning(
+                        f"Invalid date format in {repo_name}: {parts[1] if len(parts) > 1 else 'unknown'}"
+                    )
                     continue
 
                 current_commit = {
@@ -1781,30 +2030,34 @@ class GitDataCollector:
                     "author_name": parts[2],
                     "author_email": parts[3],
                     "subject": parts[4] if len(parts) > 4 else "",
-                    "files_changed": []
+                    "files_changed": [],
                 }
             else:
                 # Parse numstat lines (format: added<tab>removed<tab>filename)
-                parts = line.split('\t')
+                parts = line.split("\t")
                 if len(parts) >= 3 and current_commit:
                     try:
                         # Handle binary files (marked with -)
-                        added = 0 if parts[0] == '-' else int(parts[0])
-                        removed = 0 if parts[1] == '-' else int(parts[1])
+                        added = 0 if parts[0] == "-" else int(parts[0])
+                        removed = 0 if parts[1] == "-" else int(parts[1])
                         filename = parts[2]
 
                         # Skip binary files if configured
-                        if self.config.get("data_quality", {}).get("skip_binary_changes", True):
-                            if parts[0] == '-' or parts[1] == '-':
+                        if self.config.get("data_quality", {}).get(
+                            "skip_binary_changes", True
+                        ):
+                            if parts[0] == "-" or parts[1] == "-":
                                 continue
 
                         files_changed = current_commit["files_changed"]
                         assert isinstance(files_changed, list)
-                        files_changed.append({
-                            "filename": filename,
-                            "added": added,
-                            "removed": removed,
-                        })
+                        files_changed.append(
+                            {
+                                "filename": filename,
+                                "added": added,
+                                "removed": removed,
+                            }
+                        )
                     except (ValueError, IndexError):
                         # Skip malformed lines
                         continue
@@ -1815,12 +2068,18 @@ class GitDataCollector:
 
         return commits
 
-    def _update_commit_metrics(self, commit: dict[str, Any], metrics: dict[str, Any]) -> None:
+    def _update_commit_metrics(
+        self, commit: dict[str, Any], metrics: dict[str, Any]
+    ) -> None:
         """Process a single commit into the metrics structure."""
-        applicable_windows = self.bucket_commit_into_windows(commit["date"], self.time_windows)
+        applicable_windows = self.bucket_commit_into_windows(
+            commit["date"], self.time_windows
+        )
 
         # Normalize author identity
-        norm_name, norm_email = self.normalize_author_identity(commit["author_name"], commit["author_email"])
+        norm_name, norm_email = self.normalize_author_identity(
+            commit["author_name"], commit["author_email"]
+        )
         author_email = norm_email
 
         # Create author info dict for compatibility
@@ -1828,7 +2087,9 @@ class GitDataCollector:
             "name": norm_name,
             "email": norm_email,
             "username": norm_name.split()[0] if norm_name else "",
-            "domain": self.extract_organizational_domain(norm_email.split("@")[-1]) if "@" in norm_email else ""
+            "domain": self.extract_organizational_domain(norm_email.split("@")[-1])
+            if "@" in norm_email
+            else "",
         }
 
         # Calculate LOC changes for this commit
@@ -1852,7 +2113,10 @@ class GitDataCollector:
                 "username": author_info["username"],
                 "domain": author_info["domain"],
                 "commit_counts": {window: 0 for window in self.time_windows},
-                "loc_stats": {window: {"added": 0, "removed": 0, "net": 0} for window in self.time_windows},
+                "loc_stats": {
+                    window: {"added": 0, "removed": 0, "net": 0}
+                    for window in self.time_windows
+                },
                 "repositories": {window: set() for window in self.time_windows},  # type: ignore
             }
 
@@ -1863,7 +2127,9 @@ class GitDataCollector:
             author_metrics["loc_stats"][window]["added"] += total_added
             author_metrics["loc_stats"][window]["removed"] += total_removed
             author_metrics["loc_stats"][window]["net"] += net_lines
-            author_metrics["repositories"][window].add(metrics["repository"]["gerrit_project"])
+            author_metrics["repositories"][window].add(
+                metrics["repository"]["gerrit_project"]
+            )
 
     def _finalize_repo_metrics(self, metrics: dict[str, Any], repo_name: str) -> None:
         """Finalize repository metrics after processing all commits."""
@@ -1873,13 +2139,19 @@ class GitDataCollector:
         if repo_metrics.get("has_any_commits", False):
             # Repository has commits - find last commit date
             git_command = ["git", "log", "-1", "--date=iso", "--pretty=format:%ad"]
-            success, output = safe_git_command(git_command, Path(repo_metrics["local_path"]), self.logger)
+            success, output = safe_git_command(
+                git_command, Path(repo_metrics["local_path"]), self.logger
+            )
 
             if success and output.strip():
                 try:
-                    last_commit_date = datetime.datetime.fromisoformat(output.strip().replace(' ', 'T'))
+                    last_commit_date = datetime.datetime.fromisoformat(
+                        output.strip().replace(" ", "T")
+                    )
                     if last_commit_date.tzinfo is None:
-                        last_commit_date = last_commit_date.replace(tzinfo=datetime.timezone.utc)
+                        last_commit_date = last_commit_date.replace(
+                            tzinfo=datetime.timezone.utc
+                        )
 
                     repo_metrics["last_commit_timestamp"] = last_commit_date.isoformat()
 
@@ -1889,10 +2161,16 @@ class GitDataCollector:
                     repo_metrics["days_since_last_commit"] = days_since
 
                     # Determine activity status using unified thresholds
-                    current_threshold = self.config.get("activity_thresholds", {}).get("current_days", 365)
-                    active_threshold = self.config.get("activity_thresholds", {}).get("active_days", 1095)
+                    current_threshold = self.config.get("activity_thresholds", {}).get(
+                        "current_days", 365
+                    )
+                    active_threshold = self.config.get("activity_thresholds", {}).get(
+                        "active_days", 1095
+                    )
 
-                    has_recent_commits = any(count > 0 for count in repo_metrics["commit_counts"].values())
+                    has_recent_commits = any(
+                        count > 0 for count in repo_metrics["commit_counts"].values()
+                    )
 
                     if has_recent_commits and days_since <= current_threshold:
                         repo_metrics["activity_status"] = "current"
@@ -1902,13 +2180,21 @@ class GitDataCollector:
                         repo_metrics["activity_status"] = "inactive"
 
                     # Log appropriate message based on activity
-                    if any(count > 0 for count in repo_metrics["commit_counts"].values()):
-                        self.logger.debug(f"Repository {repo_name} has {repo_metrics['total_commits_ever']} commits ({sum(repo_metrics['commit_counts'].values())} recent)")
+                    if any(
+                        count > 0 for count in repo_metrics["commit_counts"].values()
+                    ):
+                        self.logger.debug(
+                            f"Repository {repo_name} has {repo_metrics['total_commits_ever']} commits ({sum(repo_metrics['commit_counts'].values())} recent)"
+                        )
                     else:
-                        self.logger.debug(f"Repository {repo_name} has {repo_metrics['total_commits_ever']} commits (all historical, none recent)")
+                        self.logger.debug(
+                            f"Repository {repo_name} has {repo_metrics['total_commits_ever']} commits (all historical, none recent)"
+                        )
 
                 except ValueError as e:
-                    self.logger.warning(f"Could not parse last commit date for {repo_name}: {e}")
+                    self.logger.warning(
+                        f"Could not parse last commit date for {repo_name}: {e}"
+                    )
         else:
             # Truly no commits - empty repository
             self.logger.info(f"Repository {repo_name} has no commits")
@@ -1916,7 +2202,9 @@ class GitDataCollector:
         # Convert author repository sets to counts for JSON serialization
         for author_email, author_data in metrics["authors"].items():
             for window in self.time_windows:
-                author_data["repositories"][window] = len(author_data["repositories"][window])
+                author_data["repositories"][window] = len(
+                    author_data["repositories"][window]
+                )
 
         # Embed authors data in repository record for aggregation
         repo_authors = []
@@ -1928,16 +2216,23 @@ class GitDataCollector:
                 "username": author_data["username"],
                 "domain": author_data["domain"],
                 "commits": author_data["commit_counts"],
-                "lines_added": {window: author_data["loc_stats"][window]["added"] for window in self.time_windows},
-                "lines_removed": {window: author_data["loc_stats"][window]["removed"] for window in self.time_windows},
-                "lines_net": {window: author_data["loc_stats"][window]["net"] for window in self.time_windows},
+                "lines_added": {
+                    window: author_data["loc_stats"][window]["added"]
+                    for window in self.time_windows
+                },
+                "lines_removed": {
+                    window: author_data["loc_stats"][window]["removed"]
+                    for window in self.time_windows
+                },
+                "lines_net": {
+                    window: author_data["loc_stats"][window]["net"]
+                    for window in self.time_windows
+                },
                 "repositories": author_data["repositories"],
             }
             repo_authors.append(author_record)
 
         metrics["repository"]["authors"] = repo_authors
-
-
 
     def _get_repo_cache_key(self, repo_path: Path) -> Optional[str]:
         """Generate a cache key based on the repository's HEAD commit hash."""
@@ -1947,10 +2242,12 @@ class GitDataCollector:
         if success and output.strip():
             head_hash = output.strip()
             # Include time windows in cache key to invalidate when windows change
-            windows_key = hashlib.sha256(json.dumps(self.time_windows, sort_keys=True).encode()).hexdigest()[:8]
+            windows_key = hashlib.sha256(
+                json.dumps(self.time_windows, sort_keys=True).encode()
+            ).hexdigest()[:8]
             project_name = self._extract_gerrit_project(repo_path)
             # Replace path separators for cache key
-            safe_project_name = project_name.replace('/', '_')
+            safe_project_name = project_name.replace("/", "_")
             return f"{safe_project_name}_{head_hash}_{windows_key}"
 
         return None
@@ -1973,7 +2270,7 @@ class GitDataCollector:
             if not cache_path or not cache_path.exists():
                 return None
 
-            with open(cache_path, 'r', encoding='utf-8') as f:
+            with open(cache_path, "r", encoding="utf-8") as f:
                 cached_data = json.load(f)
 
             # Validate cache structure
@@ -1983,11 +2280,15 @@ class GitDataCollector:
                 return None
 
             # Check if cache is compatible with current time windows
-            cached_windows = set(cached_data.get("repository", {}).get("commit_counts", {}).keys())
+            cached_windows = set(
+                cached_data.get("repository", {}).get("commit_counts", {}).keys()
+            )
             current_windows = set(self.time_windows.keys())
 
             if cached_windows != current_windows:
-                self.logger.debug(f"Cache invalidated for {repo_path.name}: time windows changed")
+                self.logger.debug(
+                    f"Cache invalidated for {repo_path.name}: time windows changed"
+                )
                 return None
 
             return cached_data
@@ -2006,7 +2307,7 @@ class GitDataCollector:
             # Create a cache-friendly copy (convert sets to lists if any remain)
             cache_data = json.loads(json.dumps(metrics, default=str))
 
-            with open(cache_path, 'w', encoding='utf-8') as f:
+            with open(cache_path, "w", encoding="utf-8") as f:
                 json.dump(cache_data, f, indent=2, default=str)
 
             self.logger.debug(f"Saved cache for {repo_path.name}")
@@ -2014,9 +2315,11 @@ class GitDataCollector:
         except (IOError, TypeError) as e:
             self.logger.warning(f"Failed to save cache for {repo_path.name}: {e}")
 
+
 # =============================================================================
 # FEATURE SCANNING AND REGISTRY (Phase 3 - TODO)
 # =============================================================================
+
 
 class FeatureRegistry:
     """Registry for repository feature detection functions."""
@@ -2058,17 +2361,16 @@ class FeatureRegistry:
                 try:
                     results[feature_name] = self.checks[feature_name](repo_path)
                 except Exception as e:
-                    self.logger.warning(f"Feature check '{feature_name}' failed for {repo_path.name}: {e}")
+                    self.logger.warning(
+                        f"Feature check '{feature_name}' failed for {repo_path.name}: {e}"
+                    )
                     results[feature_name] = {"error": str(e)}
 
         return results
 
     def _check_dependabot(self, repo_path: Path) -> dict[str, Any]:
         """Check for Dependabot configuration."""
-        config_files = [
-            ".github/dependabot.yml",
-            ".github/dependabot.yaml"
-        ]
+        config_files = [".github/dependabot.yml", ".github/dependabot.yaml"]
 
         found_files = []
         for config_file in config_files:
@@ -2076,10 +2378,7 @@ class FeatureRegistry:
             if file_path.exists():
                 found_files.append(config_file)
 
-        return {
-            "present": len(found_files) > 0,
-            "files": found_files
-        }
+        return {"present": len(found_files) > 0, "files": found_files}
 
     def _check_github2gerrit_workflow(self, repo_path: Path) -> dict[str, Any]:
         """Check for GitHub to Gerrit workflow patterns."""
@@ -2088,22 +2387,29 @@ class FeatureRegistry:
             return {"present": False, "workflows": []}
 
         gerrit_patterns = [
-            "gerrit", "review", "submit", "replication",
-            "github2gerrit", "gerrit-review", "gerrit-submit"
+            "gerrit",
+            "review",
+            "submit",
+            "replication",
+            "github2gerrit",
+            "gerrit-review",
+            "gerrit-submit",
         ]
 
         matching_workflows: list[dict[str, str]] = []
         try:
             for workflow_file in workflows_dir.glob("*.yml"):
                 try:
-                    with open(workflow_file, 'r', encoding='utf-8') as f:
+                    with open(workflow_file, "r", encoding="utf-8") as f:
                         content = f.read().lower()
                         for pattern in gerrit_patterns:
                             if pattern in content:
-                                matching_workflows.append({  # type: ignore
-                                    "file": workflow_file.name,
-                                    "pattern": pattern
-                                })
+                                matching_workflows.append(
+                                    {  # type: ignore
+                                        "file": workflow_file.name,
+                                        "pattern": pattern,
+                                    }
+                                )
                                 break
                 except (IOError, UnicodeDecodeError):
                     continue
@@ -2111,14 +2417,16 @@ class FeatureRegistry:
             # Also check .yaml files
             for workflow_file in workflows_dir.glob("*.yaml"):
                 try:
-                    with open(workflow_file, 'r', encoding='utf-8') as f:
+                    with open(workflow_file, "r", encoding="utf-8") as f:
                         content = f.read().lower()
                         for pattern in gerrit_patterns:
                             if pattern in content:
-                                matching_workflows.append({  # type: ignore
-                                    "file": workflow_file.name,
-                                    "pattern": pattern
-                                })
+                                matching_workflows.append(
+                                    {  # type: ignore
+                                        "file": workflow_file.name,
+                                        "pattern": pattern,
+                                    }
+                                )
                                 break
                 except (IOError, UnicodeDecodeError):
                     continue
@@ -2126,18 +2434,12 @@ class FeatureRegistry:
         except OSError:
             return {"present": False, "workflows": []}
 
-        return {
-            "present": len(matching_workflows) > 0,
-            "workflows": matching_workflows
-        }
+        return {"present": len(matching_workflows) > 0, "workflows": matching_workflows}
 
     def _check_g2g(self, repo_path: Path) -> dict[str, Any]:
         """Check for specific GitHub to Gerrit workflow files."""
         workflows_dir = repo_path / ".github" / "workflows"
-        g2g_files = [
-            "github2gerrit.yaml",
-            "call-github2gerrit.yaml"
-        ]
+        g2g_files = ["github2gerrit.yaml", "call-github2gerrit.yaml"]
 
         found_files = []
         for filename in g2g_files:
@@ -2148,15 +2450,14 @@ class FeatureRegistry:
         return {
             "present": len(found_files) > 0,
             "file_paths": found_files,
-            "file_path": found_files[0] if found_files else None  # Keep for backward compatibility
+            "file_path": found_files[0]
+            if found_files
+            else None,  # Keep for backward compatibility
         }
 
     def _check_pre_commit(self, repo_path: Path) -> dict[str, Any]:
         """Check for pre-commit configuration."""
-        config_files = [
-            ".pre-commit-config.yaml",
-            ".pre-commit-config.yml"
-        ]
+        config_files = [".pre-commit-config.yaml", ".pre-commit-config.yml"]
 
         found_config = None
         for config_file in config_files:
@@ -2167,18 +2468,21 @@ class FeatureRegistry:
 
         result: dict[str, Any] = {
             "present": found_config is not None,
-            "config_file": found_config
+            "config_file": found_config,
         }
 
         # If config exists, try to extract some basic info
         if found_config:
             try:
                 config_path = repo_path / found_config
-                with open(config_path, 'r', encoding='utf-8') as f:
+                with open(config_path, "r", encoding="utf-8") as f:
                     content = f.read()
                     # Count number of repos/hooks (basic analysis)
                     import re
-                    repos_count = len(re.findall(r'^\s*-\s*repo:', content, re.MULTILINE))
+
+                    repos_count = len(
+                        re.findall(r"^\s*-\s*repo:", content, re.MULTILINE)
+                    )
                     result["repos_count"] = repos_count
             except (IOError, UnicodeDecodeError):
                 pass
@@ -2192,19 +2496,12 @@ class FeatureRegistry:
             ".readthedocs.yml",
             ".readthedocs.yaml",
             "readthedocs.yml",
-            "readthedocs.yaml"
+            "readthedocs.yaml",
         ]
 
-        sphinx_configs = [
-            "docs/conf.py",
-            "doc/conf.py",
-            "documentation/conf.py"
-        ]
+        sphinx_configs = ["docs/conf.py", "doc/conf.py", "documentation/conf.py"]
 
-        mkdocs_configs = [
-            "mkdocs.yml",
-            "mkdocs.yaml"
-        ]
+        mkdocs_configs = ["mkdocs.yml", "mkdocs.yaml"]
 
         found_configs = []
         config_type = None
@@ -2232,7 +2529,7 @@ class FeatureRegistry:
         return {
             "present": len(found_configs) > 0,
             "config_type": config_type,
-            "config_files": found_configs
+            "config_files": found_configs,
         }
 
     def _check_sonatype_config(self, repo_path: Path) -> dict[str, Any]:
@@ -2244,7 +2541,7 @@ class FeatureRegistry:
             "lifecycle.json",
             ".lift.toml",
             "sonatype-lift.yml",
-            "sonatype-lift.yaml"
+            "sonatype-lift.yaml",
         ]
 
         found_configs = []
@@ -2252,10 +2549,7 @@ class FeatureRegistry:
             if (repo_path / config).exists():
                 found_configs.append(config)
 
-        return {
-            "present": len(found_configs) > 0,
-            "config_files": found_configs
-        }
+        return {"present": len(found_configs) > 0, "config_files": found_configs}
 
     def _check_project_types(self, repo_path: Path) -> dict[str, Any]:
         """Detect project types based on configuration files and repository characteristics."""
@@ -2266,14 +2560,28 @@ class FeatureRegistry:
             return {
                 "detected_types": ["jjb"],
                 "primary_type": "jjb",
-                "details": [{"type": "jjb", "files": ["repository_name"], "confidence": 100}]
+                "details": [
+                    {"type": "jjb", "files": ["repository_name"], "confidence": 100}
+                ],
             }
 
         project_types = {
             "maven": ["pom.xml"],
-            "gradle": ["build.gradle", "build.gradle.kts", "gradle.properties", "settings.gradle"],
+            "gradle": [
+                "build.gradle",
+                "build.gradle.kts",
+                "gradle.properties",
+                "settings.gradle",
+            ],
             "node": ["package.json"],
-            "python": ["pyproject.toml", "requirements.txt", "setup.py", "setup.cfg", "Pipfile", "poetry.lock"],
+            "python": [
+                "pyproject.toml",
+                "requirements.txt",
+                "setup.py",
+                "setup.cfg",
+                "Pipfile",
+                "poetry.lock",
+            ],
             "docker": ["Dockerfile", "docker-compose.yml", "docker-compose.yaml"],
             "go": ["go.mod", "go.sum"],
             "rust": ["Cargo.toml", "Cargo.lock"],
@@ -2284,7 +2592,7 @@ class FeatureRegistry:
             "php": ["composer.json", "composer.lock"],
             "scala": ["build.sbt", "project/build.properties"],
             "swift": ["Package.swift"],
-            "kotlin": ["build.gradle.kts"]
+            "kotlin": ["build.gradle.kts"],
         }
 
         detected_types = []
@@ -2307,11 +2615,9 @@ class FeatureRegistry:
                         matches.append(config_pattern)
 
             if matches:
-                detected_types.append({
-                    "type": project_type,
-                    "files": matches,
-                    "confidence": len(matches)
-                })
+                detected_types.append(
+                    {"type": project_type, "files": matches, "confidence": len(matches)}
+                )
                 confidence_scores[project_type] = len(matches)
 
         # Determine primary type (highest confidence)
@@ -2324,13 +2630,19 @@ class FeatureRegistry:
             return {
                 "detected_types": ["documentation"],
                 "primary_type": "documentation",
-                "details": [{"type": "documentation", "files": self._get_doc_indicators(repo_path), "confidence": 50}]
+                "details": [
+                    {
+                        "type": "documentation",
+                        "files": self._get_doc_indicators(repo_path),
+                        "confidence": 50,
+                    }
+                ],
             }
 
         return {
             "detected_types": [t["type"] for t in detected_types],
             "primary_type": primary_type,
-            "details": detected_types
+            "details": detected_types,
         }
 
     def _is_documentation_repository(self, repo_path: Path) -> bool:
@@ -2339,7 +2651,10 @@ class FeatureRegistry:
 
         # Only classify as documentation if repository name strongly indicates it
         strong_doc_patterns = ["documentation", "manual", "wiki", "guide", "tutorial"]
-        if any(repo_name == pattern or repo_name.endswith(f"-{pattern}") for pattern in strong_doc_patterns):
+        if any(
+            repo_name == pattern or repo_name.endswith(f"-{pattern}")
+            for pattern in strong_doc_patterns
+        ):
             return True
 
         # For repos named exactly "doc" or "docs"
@@ -2348,7 +2663,9 @@ class FeatureRegistry:
 
         # Check directory structure and file patterns - be more restrictive
         doc_indicators = self._get_doc_indicators(repo_path)
-        return len(doc_indicators) >= 5  # Require more indicators for stronger confidence
+        return (
+            len(doc_indicators) >= 5
+        )  # Require more indicators for stronger confidence
 
     def _get_doc_indicators(self, repo_path: Path) -> list[str]:
         """Get list of documentation indicators found in the repository."""
@@ -2356,12 +2673,19 @@ class FeatureRegistry:
 
         # Check for common documentation files
         doc_files = [
-            "README.md", "README.rst", "README.txt",
-            "DOCS.md", "DOCUMENTATION.md",
-            "index.md", "index.rst", "index.html",
-            "sphinx.conf", "conf.py",  # Sphinx
-            "mkdocs.yml", "_config.yml",  # MkDocs/Jekyll
-            "Gemfile"  # Jekyll
+            "README.md",
+            "README.rst",
+            "README.txt",
+            "DOCS.md",
+            "DOCUMENTATION.md",
+            "index.md",
+            "index.rst",
+            "index.html",
+            "sphinx.conf",
+            "conf.py",  # Sphinx
+            "mkdocs.yml",
+            "_config.yml",  # MkDocs/Jekyll
+            "Gemfile",  # Jekyll
         ]
 
         for doc_file in doc_files:
@@ -2369,7 +2693,15 @@ class FeatureRegistry:
                 indicators.append(doc_file)
 
         # Check for documentation directories
-        doc_dirs = ["docs", "doc", "documentation", "_docs", "manual", "guides", "tutorials"]
+        doc_dirs = [
+            "docs",
+            "doc",
+            "documentation",
+            "_docs",
+            "manual",
+            "guides",
+            "tutorials",
+        ]
         for doc_dir in doc_dirs:
             if (repo_path / doc_dir).is_dir():
                 indicators.append(f"{doc_dir}/")
@@ -2390,7 +2722,7 @@ class FeatureRegistry:
             "mkdocs.yml",  # MkDocs
             "conf.py",  # Sphinx
             "book.toml",  # mdBook
-            "docusaurus.config.js"  # Docusaurus
+            "docusaurus.config.js",  # Docusaurus
         ]
 
         for generator in static_generators:
@@ -2403,12 +2735,20 @@ class FeatureRegistry:
         """Analyze GitHub workflows with optional GitHub API integration."""
         workflows_dir = repo_path / ".github" / "workflows"
         if not workflows_dir.exists():
-            return {"count": 0, "classified": {"verify": 0, "merge": 0, "other": 0}, "files": []}
+            return {
+                "count": 0,
+                "classified": {"verify": 0, "merge": 0, "other": 0},
+                "files": [],
+            }
 
         # Get classification patterns from config
         workflow_config = self.config.get("workflows", {}).get("classify", {})
-        verify_patterns = workflow_config.get("verify", ["verify", "test", "ci", "check"])
-        merge_patterns = workflow_config.get("merge", ["merge", "release", "deploy", "publish"])
+        verify_patterns = workflow_config.get(
+            "verify", ["verify", "test", "ci", "check"]
+        )
+        merge_patterns = workflow_config.get(
+            "merge", ["merge", "release", "deploy", "publish"]
+        )
 
         workflow_files = []
         classified = {"verify": 0, "merge": 0, "other": 0}
@@ -2416,18 +2756,26 @@ class FeatureRegistry:
         try:
             # Process .yml files
             for workflow_file in workflows_dir.glob("*.yml"):
-                workflow_info = self._analyze_workflow_file(workflow_file, verify_patterns, merge_patterns)
+                workflow_info = self._analyze_workflow_file(
+                    workflow_file, verify_patterns, merge_patterns
+                )
                 workflow_files.append(workflow_info)
                 classified[workflow_info["classification"]] += 1
 
             # Process .yaml files
             for workflow_file in workflows_dir.glob("*.yaml"):
-                workflow_info = self._analyze_workflow_file(workflow_file, verify_patterns, merge_patterns)
+                workflow_info = self._analyze_workflow_file(
+                    workflow_file, verify_patterns, merge_patterns
+                )
                 workflow_files.append(workflow_info)
                 classified[workflow_info["classification"]] += 1
 
         except OSError:
-            return {"count": 0, "classified": {"verify": 0, "merge": 0, "other": 0}, "files": []}
+            return {
+                "count": 0,
+                "classified": {"verify": 0, "merge": 0, "other": 0},
+                "files": [],
+            }
 
         # Extract just the workflow names for telemetry
         workflow_names = [workflow_info["name"] for workflow_info in workflow_files]
@@ -2438,24 +2786,40 @@ class FeatureRegistry:
             "classified": classified,
             "files": workflow_files,
             "workflow_names": workflow_names,
-            "has_runtime_status": False
+            "has_runtime_status": False,
         }
 
         # Try GitHub API integration if enabled and token available
-        github_api_enabled = self.config.get("extensions", {}).get("github_api", {}).get("enabled", False)
-        github_token = self.config.get("extensions", {}).get("github_api", {}).get("token") or os.environ.get("GITHUB_TOKEN")
+        github_api_enabled = (
+            self.config.get("extensions", {})
+            .get("github_api", {})
+            .get("enabled", False)
+        )
+        github_token = self.config.get("extensions", {}).get("github_api", {}).get(
+            "token"
+        ) or os.environ.get("GITHUB_TOKEN")
 
-        if github_api_enabled and github_token and self._is_github_repository(repo_path):
+        if (
+            github_api_enabled
+            and github_token
+            and self._is_github_repository(repo_path)
+        ):
             try:
                 owner, repo_name = self._extract_github_repo_info(repo_path)
                 if owner and repo_name:
                     github_client = GitHubAPIClient(github_token)
-                    github_status = github_client.get_repository_workflow_status_summary(owner, repo_name)
+                    github_status = (
+                        github_client.get_repository_workflow_status_summary(
+                            owner, repo_name
+                        )
+                    )
 
                     # Merge GitHub API data with static analysis
                     result["github_api_data"] = github_status
                     result["has_runtime_status"] = True
-                    self.logger.debug(f"Retrieved GitHub workflow status for {owner}/{repo_name}")
+                    self.logger.debug(
+                        f"Retrieved GitHub workflow status for {owner}/{repo_name}"
+                    )
 
                     # If no local workflows were found but GitHub has workflows, use GitHub as source
                     # This handles cases where Gerrit is primary but GitHub mirror has workflows
@@ -2470,10 +2834,14 @@ class FeatureRegistry:
                         if github_workflow_names:
                             result["workflow_names"] = github_workflow_names
                             result["count"] = len(github_workflow_names)
-                            self.logger.debug(f"Using GitHub API as workflow source for {owner}/{repo_name}: {github_workflow_names}")
+                            self.logger.debug(
+                                f"Using GitHub API as workflow source for {owner}/{repo_name}: {github_workflow_names}"
+                            )
 
             except Exception as e:
-                self.logger.warning(f"Failed to fetch GitHub workflow status for {repo_path}: {e}")
+                self.logger.warning(
+                    f"Failed to fetch GitHub workflow status for {repo_path}: {e}"
+                )
 
         return result
 
@@ -2488,7 +2856,7 @@ class FeatureRegistry:
                     "exists": False,
                     "owner": "",
                     "repo": "",
-                    "reason": "no_github_indicators"
+                    "reason": "no_github_indicators",
                 }
 
             # Check if the GitHub repository actually exists
@@ -2498,7 +2866,7 @@ class FeatureRegistry:
                     "exists": False,
                     "owner": owner,
                     "repo": repo_name,
-                    "reason": "cannot_determine_github_info"
+                    "reason": "cannot_determine_github_info",
                 }
 
             # Verify the repository exists on GitHub
@@ -2508,7 +2876,7 @@ class FeatureRegistry:
                 "exists": exists,
                 "owner": owner,
                 "repo": repo_name,
-                "reason": "verified" if exists else "not_found_on_github"
+                "reason": "verified" if exists else "not_found_on_github",
             }
 
         except Exception as e:
@@ -2517,20 +2885,22 @@ class FeatureRegistry:
                 "exists": False,
                 "owner": "",
                 "repo": "",
-                "reason": f"error: {str(e)}"
+                "reason": f"error: {str(e)}",
             }
 
-    def _analyze_workflow_file(self, workflow_file: Path, verify_patterns: list[str], merge_patterns: list[str]) -> dict[str, Any]:
+    def _analyze_workflow_file(
+        self, workflow_file: Path, verify_patterns: list[str], merge_patterns: list[str]
+    ) -> dict[str, Any]:
         """Analyze a single workflow file for classification."""
         workflow_info: dict[str, Any] = {
             "name": workflow_file.name,
             "classification": "other",
             "triggers": [],
-            "jobs": 0
+            "jobs": 0,
         }
 
         try:
-            with open(workflow_file, 'r', encoding='utf-8') as f:
+            with open(workflow_file, "r", encoding="utf-8") as f:
                 content = f.read().lower()
                 filename_lower = workflow_file.name.lower()
 
@@ -2546,7 +2916,7 @@ class FeatureRegistry:
                     pattern_lower = pattern.lower()
                     if pattern_lower in filename_lower:
                         verify_score += 3  # Higher weight for filename matches
-                    elif re.search(r'\b' + re.escape(pattern_lower) + r'\b', content):
+                    elif re.search(r"\b" + re.escape(pattern_lower) + r"\b", content):
                         verify_score += 1
 
                 # Score merge patterns (filename matches count more)
@@ -2554,7 +2924,7 @@ class FeatureRegistry:
                     pattern_lower = pattern.lower()
                     if pattern_lower in filename_lower:
                         merge_score += 3  # Higher weight for filename matches
-                    elif re.search(r'\b' + re.escape(pattern_lower) + r'\b', content):
+                    elif re.search(r"\b" + re.escape(pattern_lower) + r"\b", content):
                         merge_score += 1
 
                 # Classify based on highest score
@@ -2568,25 +2938,29 @@ class FeatureRegistry:
                 import re
 
                 # Find triggers (on: section)
-                trigger_matches = re.findall(r'on:\s*\n\s*-?\s*(\w+)', content)
+                trigger_matches = re.findall(r"on:\s*\n\s*-?\s*(\w+)", content)
                 if trigger_matches:
                     workflow_info["triggers"] = trigger_matches
                 else:
                     # Try alternative format
-                    if 'on: push' in content:
+                    if "on: push" in content:
                         triggers_list = workflow_info["triggers"]
                         assert isinstance(triggers_list, list)
-                        triggers_list.append('push')
-                    if 'on: pull_request' in content:
+                        triggers_list.append("push")
+                    if "on: pull_request" in content:
                         triggers_list = workflow_info["triggers"]
                         assert isinstance(triggers_list, list)
-                        triggers_list.append('pull_request')
+                        triggers_list.append("pull_request")
 
                 # Count jobs
-                job_matches = re.findall(r'^\s*(\w+):\s*$', content, re.MULTILINE)
+                job_matches = re.findall(r"^\s*(\w+):\s*$", content, re.MULTILINE)
                 # Filter out common YAML keys that aren't jobs
-                non_job_keys = {'on', 'env', 'defaults', 'jobs', 'name', 'run-name'}
-                jobs = [job for job in job_matches if job not in non_job_keys and not job.startswith('step')]
+                non_job_keys = {"on", "env", "defaults", "jobs", "name", "run-name"}
+                jobs = [
+                    job
+                    for job in job_matches
+                    if job not in non_job_keys and not job.startswith("step")
+                ]
                 workflow_info["jobs"] = len(set(jobs))  # Remove duplicates
 
         except (IOError, UnicodeDecodeError):
@@ -2606,7 +2980,7 @@ class FeatureRegistry:
             # Read git config or remote files
             config_file = git_dir / "config"
             if config_file.exists():
-                with open(config_file, 'r') as f:
+                with open(config_file, "r") as f:
                     content = f.read()
                     # Check for GitHub remotes
                     if "github.com" in content.lower():
@@ -2631,7 +3005,9 @@ class FeatureRegistry:
                 return False
 
             # Try to access GitHub API to verify repository exists
-            github_token = self.config.get("extensions", {}).get("github_api", {}).get("token") or os.environ.get("GITHUB_TOKEN")
+            github_token = self.config.get("extensions", {}).get("github_api", {}).get(
+                "token"
+            ) or os.environ.get("GITHUB_TOKEN")
 
             if github_token:
                 try:
@@ -2639,16 +3015,23 @@ class FeatureRegistry:
                     response = github_client.client.get(f"/repos/{owner}/{repo_name}")
                     return response.status_code == 200
                 except Exception as e:
-                    self.logger.debug(f"GitHub API check failed for {owner}/{repo_name}: {e}")
+                    self.logger.debug(
+                        f"GitHub API check failed for {owner}/{repo_name}: {e}"
+                    )
 
             # Fallback: make a simple HTTP request without authentication
             try:
                 import httpx
+
                 with httpx.Client(timeout=10.0) as client:
-                    response = client.get(f"https://api.github.com/repos/{owner}/{repo_name}")
+                    response = client.get(
+                        f"https://api.github.com/repos/{owner}/{repo_name}"
+                    )
                     return response.status_code == 200
             except Exception as e:
-                self.logger.debug(f"GitHub repository existence check failed for {owner}/{repo_name}: {e}")
+                self.logger.debug(
+                    f"GitHub repository existence check failed for {owner}/{repo_name}: {e}"
+                )
                 return False
 
         except Exception:
@@ -2664,15 +3047,16 @@ class FeatureRegistry:
                 # For ONAP repos, try to infer from path structure
                 return self._infer_github_info_from_path(repo_path)
 
-            with open(config_file, 'r') as f:
+            with open(config_file, "r") as f:
                 content = f.read()
 
             # Look for GitHub remote URLs
             import re
+
             # Match both HTTPS and SSH formats
             patterns = [
-                r'url = https://github\.com/([^/]+)/([^/\s]+)(?:\.git)?',
-                r'url = git@github\.com:([^/]+)/([^/\s]+)(?:\.git)?'
+                r"url = https://github\.com/([^/]+)/([^/\s]+)(?:\.git)?",
+                r"url = git@github\.com:([^/]+)/([^/\s]+)(?:\.git)?",
             ]
 
             for pattern in patterns:
@@ -2680,7 +3064,7 @@ class FeatureRegistry:
                 if match:
                     owner, repo = match.groups()
                     # Clean up repo name
-                    repo = repo.rstrip('.git')
+                    repo = repo.rstrip(".git")
                     return owner, repo
 
             # Fallback to path-based inference for mirrored repos
@@ -2699,7 +3083,7 @@ class FeatureRegistry:
                 onap_index = path_parts.index("ONAP")
                 if onap_index < len(path_parts) - 1:
                     # Get the project path after ONAP
-                    project_parts = path_parts[onap_index + 1:]
+                    project_parts = path_parts[onap_index + 1 :]
                     if project_parts:
                         # Convert path like "aai/babel" to "onap/aai-babel"
                         repo_name = "-".join(project_parts)
@@ -2714,34 +3098,28 @@ class FeatureRegistry:
         gitreview_file = repo_path / ".gitreview"
 
         if not gitreview_file.exists():
-            return {
-                "present": False,
-                "file": None,
-                "config": {}
-            }
+            return {"present": False, "file": None, "config": {}}
 
         # Parse .gitreview file content
         config = {}
         try:
-            with open(gitreview_file, 'r', encoding='utf-8') as f:
+            with open(gitreview_file, "r", encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
-                    if line and not line.startswith('#') and '=' in line:
-                        key, value = line.split('=', 1)
+                    if line and not line.startswith("#") and "=" in line:
+                        key, value = line.split("=", 1)
                         config[key.strip()] = value.strip()
         except (IOError, UnicodeDecodeError):
             # File exists but couldn't be read
             pass
 
-        return {
-            "present": True,
-            "file": ".gitreview",
-            "config": config
-        }
+        return {"present": True, "file": ".gitreview", "config": config}
+
 
 # =============================================================================
 # AGGREGATION AND RANKING (Phase 4 - TODO)
 # =============================================================================
+
 
 class DataAggregator:
     """Handles aggregation of repository data into global summaries."""
@@ -2750,7 +3128,9 @@ class DataAggregator:
         self.config = config
         self.logger = logger
 
-    def aggregate_global_data(self, repo_metrics: list[dict[str, Any]]) -> dict[str, Any]:
+    def aggregate_global_data(
+        self, repo_metrics: list[dict[str, Any]]
+    ) -> dict[str, Any]:
         """
         Aggregate all repository metrics into global summaries.
 
@@ -2767,9 +3147,12 @@ class DataAggregator:
         self._analyze_repository_commit_status(repo_metrics)
 
         # Configuration values for unified activity status
-        current_threshold = self.config.get("activity_thresholds", {}).get("current_days", 365)
-        active_threshold = self.config.get("activity_thresholds", {}).get("active_days", 1095)
-
+        current_threshold = self.config.get("activity_thresholds", {}).get(
+            "current_days", 365
+        )
+        active_threshold = self.config.get("activity_thresholds", {}).get(
+            "active_days", 1095
+        )
 
         # Primary time window for rankings (usually last_365_days)
         primary_window = "last_365_days"
@@ -2788,7 +3171,9 @@ class DataAggregator:
 
             # Count total commits and lines of code
             total_commits += repo.get("commit_counts", {}).get(primary_window, 0)
-            total_lines_added += repo.get("loc_stats", {}).get(primary_window, {}).get("added", 0)
+            total_lines_added += (
+                repo.get("loc_stats", {}).get(primary_window, {}).get("added", 0)
+            )
 
             # Check if repository has no commits at all (use the explicit flag)
             has_any_commits = repo.get("has_any_commits", False)
@@ -2828,52 +3213,34 @@ class DataAggregator:
             all_repos,
             f"commit_counts.{primary_window}",
             reverse=True,
-            limit=None  # No limit - show all repositories
+            limit=None,  # No limit - show all repositories
         )
 
         # Keep separate lists for different activity statuses
         top_current = self.rank_entities(
-            current_repos,
-            f"commit_counts.{primary_window}",
-            reverse=True,
-            limit=None
+            current_repos, f"commit_counts.{primary_window}", reverse=True, limit=None
         )
 
         top_active = self.rank_entities(
-            active_repos,
-            f"commit_counts.{primary_window}",
-            reverse=True,
-            limit=None
+            active_repos, f"commit_counts.{primary_window}", reverse=True, limit=None
         )
 
         least_active = self.rank_entities(
-            inactive_repos,
-            "days_since_last_commit",
-            reverse=True,
-            limit=None
+            inactive_repos, "days_since_last_commit", reverse=True, limit=None
         )
 
         # Build contributor leaderboards
         top_contributors_commits = self.rank_entities(
-            authors,
-            f"commits.{primary_window}",
-            reverse=True,
-            limit=None
+            authors, f"commits.{primary_window}", reverse=True, limit=None
         )
 
         top_contributors_loc = self.rank_entities(
-            authors,
-            f"lines_net.{primary_window}",
-            reverse=True,
-            limit=None
+            authors, f"lines_net.{primary_window}", reverse=True, limit=None
         )
 
         # Build organization leaderboard
         top_organizations = self.rank_entities(
-            organizations,
-            f"commits.{primary_window}",
-            reverse=True,
-            limit=None
+            organizations, f"commits.{primary_window}", reverse=True, limit=None
         )
 
         # Build comprehensive summaries
@@ -2890,9 +3257,33 @@ class DataAggregator:
                 "total_organizations": len(organizations),
             },
             "activity_status_distribution": {
-                "current": [{"gerrit_project": r.get("gerrit_project", "Unknown"), "days_since_last_commit": r.get("days_since_last_commit") if r.get("days_since_last_commit") is not None else 999999} for r in current_repos],
-                "active": [{"gerrit_project": r.get("gerrit_project", "Unknown"), "days_since_last_commit": r.get("days_since_last_commit") if r.get("days_since_last_commit") is not None else 999999} for r in active_repos],
-                "inactive": [{"gerrit_project": r.get("gerrit_project", "Unknown"), "days_since_last_commit": r.get("days_since_last_commit") if r.get("days_since_last_commit") is not None else 999999} for r in inactive_repos],
+                "current": [
+                    {
+                        "gerrit_project": r.get("gerrit_project", "Unknown"),
+                        "days_since_last_commit": r.get("days_since_last_commit")
+                        if r.get("days_since_last_commit") is not None
+                        else 999999,
+                    }
+                    for r in current_repos
+                ],
+                "active": [
+                    {
+                        "gerrit_project": r.get("gerrit_project", "Unknown"),
+                        "days_since_last_commit": r.get("days_since_last_commit")
+                        if r.get("days_since_last_commit") is not None
+                        else 999999,
+                    }
+                    for r in active_repos
+                ],
+                "inactive": [
+                    {
+                        "gerrit_project": r.get("gerrit_project", "Unknown"),
+                        "days_since_last_commit": r.get("days_since_last_commit")
+                        if r.get("days_since_last_commit") is not None
+                        else 999999,
+                    }
+                    for r in inactive_repos
+                ],
             },
             "top_current_repositories": top_current,
             "top_active_repositories": top_active,
@@ -2904,12 +3295,18 @@ class DataAggregator:
             "top_organizations": top_organizations,
         }
 
-        self.logger.info(f"Aggregation complete: {len(current_repos)} current, {len(active_repos)} active, {len(inactive_repos)} inactive, {len(no_commit_repos)} no-commit repositories")
-        self.logger.info(f"Found {len(authors)} authors across {len(organizations)} organizations")
+        self.logger.info(
+            f"Aggregation complete: {len(current_repos)} current, {len(active_repos)} active, {len(inactive_repos)} inactive, {len(no_commit_repos)} no-commit repositories"
+        )
+        self.logger.info(
+            f"Found {len(authors)} authors across {len(organizations)} organizations"
+        )
 
         return summaries
 
-    def _analyze_repository_commit_status(self, repo_metrics: list[dict[str, Any]]) -> None:
+    def _analyze_repository_commit_status(
+        self, repo_metrics: list[dict[str, Any]]
+    ) -> None:
         """Diagnostic function to analyze repository commit status."""
         self.logger.info("=== Repository Analysis ===")
 
@@ -2930,11 +3327,12 @@ class DataAggregator:
                 repos_with_commits += 1
             else:
                 repos_no_commits += 1
-                if len(sample_no_commit_repos) < 3:  # Collect sample for detailed analysis
-                    sample_no_commit_repos.append({
-                        "gerrit_project": repo_name,
-                        "commit_counts": commit_counts
-                    })
+                if (
+                    len(sample_no_commit_repos) < 3
+                ):  # Collect sample for detailed analysis
+                    sample_no_commit_repos.append(
+                        {"gerrit_project": repo_name, "commit_counts": commit_counts}
+                    )
 
         self.logger.info(f"Total repositories: {total_repos}")
         self.logger.info(f"Repositories with commits: {repos_with_commits}")
@@ -2945,7 +3343,9 @@ class DataAggregator:
             for repo in sample_no_commit_repos:
                 self.logger.info(f"  - {repo['gerrit_project']}")
 
-    def compute_author_rollups(self, repo_metrics: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def compute_author_rollups(
+        self, repo_metrics: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
         """
         Aggregate author metrics across all repositories.
 
@@ -2954,18 +3354,19 @@ class DataAggregator:
         """
         from collections import defaultdict
 
-
-        author_aggregates: dict[str, dict[str, Any]] = defaultdict(lambda: {
-            "name": "",
-            "email": "",
-            "username": "",
-            "domain": "",
-            "repositories_touched": defaultdict(set),
-            "commits": defaultdict(int),
-            "lines_added": defaultdict(int),
-            "lines_removed": defaultdict(int),
-            "lines_net": defaultdict(int),
-        })
+        author_aggregates: dict[str, dict[str, Any]] = defaultdict(
+            lambda: {
+                "name": "",
+                "email": "",
+                "username": "",
+                "domain": "",
+                "repositories_touched": defaultdict(set),
+                "commits": defaultdict(int),
+                "lines_added": defaultdict(int),
+                "lines_removed": defaultdict(int),
+                "lines_net": defaultdict(int),
+            }
+        )
 
         # Aggregate across all repositories
         for repo in repo_metrics:
@@ -2986,12 +3387,23 @@ class DataAggregator:
 
                 # Aggregate metrics for each time window
                 for window_name in author.get("commits", {}):
-                    repos_set = cast(set[str], author_aggregates[email]["repositories_touched"][window_name])
+                    repos_set = cast(
+                        set[str],
+                        author_aggregates[email]["repositories_touched"][window_name],
+                    )
                     repos_set.add(repo_name)
-                    author_aggregates[email]["commits"][window_name] += author.get("commits", {}).get(window_name, 0)
-                    author_aggregates[email]["lines_added"][window_name] += author.get("lines_added", {}).get(window_name, 0)
-                    author_aggregates[email]["lines_removed"][window_name] += author.get("lines_removed", {}).get(window_name, 0)
-                    author_aggregates[email]["lines_net"][window_name] += author.get("lines_net", {}).get(window_name, 0)
+                    author_aggregates[email]["commits"][window_name] += author.get(
+                        "commits", {}
+                    ).get(window_name, 0)
+                    author_aggregates[email]["lines_added"][window_name] += author.get(
+                        "lines_added", {}
+                    ).get(window_name, 0)
+                    author_aggregates[email]["lines_removed"][window_name] += (
+                        author.get("lines_removed", {}).get(window_name, 0)
+                    )
+                    author_aggregates[email]["lines_net"][window_name] += author.get(
+                        "lines_net", {}
+                    ).get(window_name, 0)
 
         # Convert to list format and finalize repository counts
         authors: List[Dict[str, Any]] = []
@@ -3006,18 +3418,24 @@ class DataAggregator:
                 "lines_removed": dict(data["lines_removed"]),
                 "lines_net": dict(data["lines_net"]),
                 "repositories_touched": {
-                    window: set(repos) for window, repos in data["repositories_touched"].items()
+                    window: set(repos)
+                    for window, repos in data["repositories_touched"].items()
                 },
                 "repositories_count": {
-                    window: len(repos) for window, repos in data["repositories_touched"].items()
+                    window: len(repos)
+                    for window, repos in data["repositories_touched"].items()
                 },
             }
             authors.append(author_record)
 
-        self.logger.info(f"Aggregated {len(authors)} unique authors across repositories")
+        self.logger.info(
+            f"Aggregated {len(authors)} unique authors across repositories"
+        )
         return authors
 
-    def compute_org_rollups(self, authors: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def compute_org_rollups(
+        self, authors: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
         """
         Aggregate organization metrics from author data.
 
@@ -3025,17 +3443,18 @@ class DataAggregator:
         """
         from collections import defaultdict
 
-
-        org_aggregates: dict[str, dict[str, Any]] = defaultdict(lambda: {
-            "domain": "",
-            "contributor_count": 0,
-            "contributors": set(),
-            "commits": defaultdict(int),
-            "lines_added": defaultdict(int),
-            "lines_removed": defaultdict(int),
-            "lines_net": defaultdict(int),
-            "repositories_count": defaultdict(set),
-        })
+        org_aggregates: dict[str, dict[str, Any]] = defaultdict(
+            lambda: {
+                "domain": "",
+                "contributor_count": 0,
+                "contributors": set(),
+                "commits": defaultdict(int),
+                "lines_added": defaultdict(int),
+                "lines_removed": defaultdict(int),
+                "lines_net": defaultdict(int),
+                "repositories_count": defaultdict(set),
+            }
+        )
 
         # Aggregate by domain
         for author in authors:
@@ -3049,15 +3468,28 @@ class DataAggregator:
 
             # Sum metrics across all time windows
             for window_name in author.get("commits", {}):
-                org_aggregates[domain]["commits"][window_name] += author.get("commits", {}).get(window_name, 0)
-                org_aggregates[domain]["lines_added"][window_name] += author.get("lines_added", {}).get(window_name, 0)
-                org_aggregates[domain]["lines_removed"][window_name] += author.get("lines_removed", {}).get(window_name, 0)
-                org_aggregates[domain]["lines_net"][window_name] += author.get("lines_net", {}).get(window_name, 0)
+                org_aggregates[domain]["commits"][window_name] += author.get(
+                    "commits", {}
+                ).get(window_name, 0)
+                org_aggregates[domain]["lines_added"][window_name] += author.get(
+                    "lines_added", {}
+                ).get(window_name, 0)
+                org_aggregates[domain]["lines_removed"][window_name] += author.get(
+                    "lines_removed", {}
+                ).get(window_name, 0)
+                org_aggregates[domain]["lines_net"][window_name] += author.get(
+                    "lines_net", {}
+                ).get(window_name, 0)
 
                 # Track unique repositories per organization
-                author_repos = author.get("repositories_touched", {}).get(window_name, set())
+                author_repos = author.get("repositories_touched", {}).get(
+                    window_name, set()
+                )
                 if author_repos:
-                    repos_set = cast(set[str], org_aggregates[domain]["repositories_count"][window_name])
+                    repos_set = cast(
+                        set[str],
+                        org_aggregates[domain]["repositories_count"][window_name],
+                    )
                     repos_set.update(author_repos)
 
         # Convert to list format
@@ -3071,21 +3503,31 @@ class DataAggregator:
                 "lines_removed": dict(data["lines_removed"]),
                 "lines_net": dict(data["lines_net"]),
                 "repositories_count": {
-                    window: len(repos) for window, repos in data["repositories_count"].items()
+                    window: len(repos)
+                    for window, repos in data["repositories_count"].items()
                 },
             }
             organizations.append(org_record)
 
-        self.logger.info(f"Aggregated {len(organizations)} organizations from author domains")
+        self.logger.info(
+            f"Aggregated {len(organizations)} organizations from author domains"
+        )
         return organizations
 
-    def rank_entities(self, entities: list[dict[str, Any]], sort_key: str, reverse: bool = False, limit: int | None = None) -> list[dict[str, Any]]:
+    def rank_entities(
+        self,
+        entities: list[dict[str, Any]],
+        sort_key: str,
+        reverse: bool = False,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
         """
         Sort entities by a metric with deterministic tie-breaking.
 
         Primary sort by the specified metric, secondary sort by name for stability.
         Handles nested dictionary keys (e.g., "commits.last_365_days").
         """
+
         def get_sort_value(entity):
             """Extract sort value, handling nested keys."""
             if "." in sort_key:
@@ -3110,26 +3552,34 @@ class DataAggregator:
 
         def get_name(entity):
             """Extract name for tie-breaking."""
-            return entity.get("name") or entity.get("gerrit_project") or entity.get("domain") or entity.get("email") or ""
-
-
+            return (
+                entity.get("name")
+                or entity.get("gerrit_project")
+                or entity.get("domain")
+                or entity.get("email")
+                or ""
+            )
 
         # Sort with primary metric (reverse if specified) and secondary name (always ascending)
         if reverse:
-            sorted_entities = sorted(entities, key=lambda x: (-get_sort_value(x), get_name(x)))
+            sorted_entities = sorted(
+                entities, key=lambda x: (-get_sort_value(x), get_name(x))
+            )
         else:
-            sorted_entities = sorted(entities, key=lambda x: (get_sort_value(x), get_name(x)))
-
-
+            sorted_entities = sorted(
+                entities, key=lambda x: (get_sort_value(x), get_name(x))
+            )
 
         if limit and limit > 0:
             return sorted_entities[:limit]
 
         return sorted_entities
 
+
 # =============================================================================
 # OUTPUT RENDERING (Phase 5 - TODO)
 # =============================================================================
+
 
 class ReportRenderer:
     """Handles rendering of aggregated data into various output formats."""
@@ -3146,7 +3596,7 @@ class ReportRenderer:
         """
         self.logger.info(f"Writing JSON report to {output_path}")
 
-        with open(output_path, 'w', encoding='utf-8') as f:
+        with open(output_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False, default=str)
 
     def render_markdown_report(self, data: dict[str, Any], output_path: Path) -> str:
@@ -3159,7 +3609,7 @@ class ReportRenderer:
 
         markdown_content = self._generate_markdown_content(data)
 
-        with open(output_path, 'w', encoding='utf-8') as f:
+        with open(output_path, "w", encoding="utf-8") as f:
             f.write(markdown_content)
 
         return markdown_content
@@ -3174,7 +3624,7 @@ class ReportRenderer:
 
         html_content = self._convert_markdown_to_html(markdown_content)
 
-        with open(output_path, 'w', encoding='utf-8') as f:
+        with open(output_path, "w", encoding="utf-8") as f:
             f.write(html_content)
 
     def package_zip_report(self, output_dir: Path, project: str) -> Path:
@@ -3186,7 +3636,7 @@ class ReportRenderer:
         zip_path = output_dir / f"{project}_report_bundle.zip"
         self.logger.info(f"Creating ZIP package at {zip_path}")
 
-        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
             # Add all files in the output directory
             for file_path in output_dir.iterdir():
                 if file_path.is_file() and file_path != zip_path:
@@ -3248,16 +3698,25 @@ class ReportRenderer:
         """Generate title and metadata section."""
         project = data.get("project", "Repository Analysis")
         generated_at = data.get("generated_at", "")
-        total_repos = data.get("summaries", {}).get("counts", {}).get("total_repositories", 0)
-        current_repos = data.get("summaries", {}).get("counts", {}).get("current_repositories", 0)
-        active_repos = data.get("summaries", {}).get("counts", {}).get("active_repositories", 0)
-        total_authors = data.get("summaries", {}).get("counts", {}).get("total_authors", 0)
+        total_repos = (
+            data.get("summaries", {}).get("counts", {}).get("total_repositories", 0)
+        )
+        current_repos = (
+            data.get("summaries", {}).get("counts", {}).get("current_repositories", 0)
+        )
+        active_repos = (
+            data.get("summaries", {}).get("counts", {}).get("active_repositories", 0)
+        )
+        total_authors = (
+            data.get("summaries", {}).get("counts", {}).get("total_authors", 0)
+        )
 
         # Format timestamp
         if generated_at:
             try:
                 from datetime import datetime
-                dt = datetime.fromisoformat(generated_at.replace('Z', '+00:00'))
+
+                dt = datetime.fromisoformat(generated_at.replace("Z", "+00:00"))
                 formatted_time = dt.strftime("%B %d, %Y at %H:%M UTC")
             except:
                 formatted_time = generated_at
@@ -3290,8 +3749,12 @@ class ReportRenderer:
         no_commit_pct = (no_commit_repos / total_repos * 100) if total_repos > 0 else 0
 
         # Get configuration thresholds for definitions
-        current_threshold = self.config.get("activity_thresholds", {}).get("current_days", 365)
-        active_threshold = self.config.get("activity_thresholds", {}).get("active_days", 1095)
+        current_threshold = self.config.get("activity_thresholds", {}).get(
+            "current_days", 365
+        )
+        active_threshold = self.config.get("activity_thresholds", {}).get(
+            "active_days", 1095
+        )
 
         return f"""## 📈 Global Summary
 
@@ -3322,10 +3785,13 @@ class ReportRenderer:
         def sort_key(x):
             days = x.get("days_since_last_commit")
             return days if days is not None else 999999
+
         sorted_repos = sorted(repos, key=sort_key, reverse=True)
 
-        lines = ["| Repository | Days Inactive | Last Commit Date |",
-                 "|------------|---------------|-------------------|"]
+        lines = [
+            "| Repository | Days Inactive | Last Commit Date |",
+            "|------------|---------------|-------------------|",
+        ]
 
         from datetime import datetime, timedelta
 
@@ -3343,7 +3809,9 @@ class ReportRenderer:
 
         return "\n".join(lines)
 
-    def _match_workflow_file_to_github_name(self, github_name: str, file_names: list[str]) -> str:
+    def _match_workflow_file_to_github_name(
+        self, github_name: str, file_names: list[str]
+    ) -> str:
         """
         Match GitHub workflow name to workflow file name.
 
@@ -3359,21 +3827,23 @@ class ReportRenderer:
             return github_name
 
         # Try matching without extension
-        github_base = github_name.lower().replace(' ', '-').replace('_', '-')
+        github_base = github_name.lower().replace(" ", "-").replace("_", "-")
 
         for file_name in file_names:
             file_base = file_name.lower()
             # Remove .yml/.yaml extension
-            if file_base.endswith('.yml'):
+            if file_base.endswith(".yml"):
                 file_base = file_base[:-4]
-            elif file_base.endswith('.yaml'):
+            elif file_base.endswith(".yaml"):
                 file_base = file_base[:-5]
 
             # Try various matching strategies
-            if (file_base == github_base or
-                github_base in file_base or
-                file_base in github_base or
-                file_base.replace('-', '') == github_base.replace('-', '')):
+            if (
+                file_base == github_base
+                or github_base in file_base
+                or file_base in github_base
+                or file_base.replace("-", "") == github_base.replace("-", "")
+            ):
                 return file_name
 
         # If no match found, return the first file name as fallback
@@ -3387,19 +3857,27 @@ class ReportRenderer:
             return "## 📊 All Gerrit Repositories\n\nNo repositories found."
 
         # Get configuration for definitions
-        current_threshold = self.config.get("activity_thresholds", {}).get("current_days", 365)
-        active_threshold = self.config.get("activity_thresholds", {}).get("active_days", 1095)
+        current_threshold = self.config.get("activity_thresholds", {}).get(
+            "current_days", 365
+        )
+        active_threshold = self.config.get("activity_thresholds", {}).get(
+            "active_days", 1095
+        )
 
-        lines = ["## 📊 Gerrit Projects",
-                 "",
-                 "| Gerrit Project | Commits | LOC | Contributors | Days Inactive | Last Commit Date | Status |",
-                 "|----------------|---------|---------|--------------|---------------|------------------|--------|"]
+        lines = [
+            "## 📊 Gerrit Projects",
+            "",
+            "| Gerrit Project | Commits | LOC | Contributors | Days Inactive | Last Commit Date | Status |",
+            "|----------------|---------|---------|--------------|---------------|------------------|--------|",
+        ]
 
         for repo in all_repos:
             name = repo.get("gerrit_project", "Unknown")
             commits_1y = repo.get("commit_counts", {}).get("last_365_days", 0)
             loc_1y = repo.get("loc_stats", {}).get("last_365_days", {}).get("net", 0)
-            contributors_1y = repo.get("unique_contributors", {}).get("last_365_days", 0)
+            contributors_1y = repo.get("unique_contributors", {}).get(
+                "last_365_days", 0
+            )
             days_since = repo.get("days_since_last_commit")
             if days_since is None:
                 days_since = 999999  # Very large number for repos with no commits
@@ -3408,17 +3886,15 @@ class ReportRenderer:
             age_str = self._format_age(days_since)
 
             # Map activity status to display format (emoji only)
-            status_map = {
-                "current": "✅",
-                "active": "☑️",
-                "inactive": "🛑"
-            }
+            status_map = {"current": "✅", "active": "☑️", "inactive": "🛑"}
             status = status_map.get(activity_status, "🛑")
 
             # Format days inactive
             days_inactive_str = f"{days_since:,}" if days_since < 999999 else "N/A"
 
-            lines.append(f"| {name} | {commits_1y} | {int(loc_1y):+d} | {contributors_1y} | {days_inactive_str} | {age_str} | {status} |")
+            lines.append(
+                f"| {name} | {commits_1y} | {int(loc_1y):+d} | {contributors_1y} | {days_inactive_str} | {age_str} | {status} |"
+            )
 
         lines.extend(["", f"**Total:** {len(all_repos)} repositories"])
         return "\n".join(lines)
@@ -3430,18 +3906,25 @@ class ReportRenderer:
         if not no_commit_repos:
             return ""  # Skip output entirely if no data
 
-        lines = ["## 📝 Gerrit Projects with No Apparent Commits",
-                 "",
-                 "**WARNING:** All Gerrit projects/repositories should contain at least one commit, due to the initial repository creation automation writing initial template and configuration files. The report generation and parsing logic may need checking/debugging for the projects/repositories below.",
-                 "",
-                 "| Gerrit Project |",
-                 "|------------|"]
+        lines = [
+            "## 📝 Gerrit Projects with No Apparent Commits",
+            "",
+            "**WARNING:** All Gerrit projects/repositories should contain at least one commit, due to the initial repository creation automation writing initial template and configuration files. The report generation and parsing logic may need checking/debugging for the projects/repositories below.",
+            "",
+            "| Gerrit Project |",
+            "|------------|",
+        ]
 
         for repo in no_commit_repos:
             name = repo.get("gerrit_project", "Unknown")
             lines.append(f"| {name} |")
 
-        lines.extend(["", f"**Total:** {len(no_commit_repos)} Gerrit projects with no apparent commits"])
+        lines.extend(
+            [
+                "",
+                f"**Total:** {len(no_commit_repos)} Gerrit projects with no apparent commits",
+            ]
+        )
         return "\n".join(lines)
 
     def _determine_jenkins_job_status(self, job_data: dict[str, Any]) -> str:
@@ -3481,7 +3964,7 @@ class ReportRenderer:
             "yellow": "unstable",
             "grey": "disabled",
             "disabled": "disabled",
-            "aborted": "aborted"
+            "aborted": "aborted",
         }
 
         # Try color first
@@ -3493,7 +3976,7 @@ class ReportRenderer:
             "SUCCESS": "success",
             "FAILURE": "failure",
             "UNSTABLE": "unstable",
-            "ABORTED": "aborted"
+            "ABORTED": "aborted",
         }
 
         if last_result in result_map:
@@ -3515,7 +3998,11 @@ class ReportRenderer:
         """
         # Use standardized status if available (from workflow runs)
         # Note: "status" contains run results (success/failure), different from "state" (active/disabled)
-        if "status" in workflow_data and workflow_data["status"] and workflow_data["status"] != "unknown":
+        if (
+            "status" in workflow_data
+            and workflow_data["status"]
+            and workflow_data["status"] != "unknown"
+        ):
             status = workflow_data["status"]
             # Map building to in_progress for display compatibility
             if status == "building":
@@ -3540,7 +4027,7 @@ class ReportRenderer:
                 "cancelled": "cancelled",
                 "skipped": "skipped",
                 "timed_out": "failure",
-                "action_required": "failure"
+                "action_required": "failure",
             }
             return conclusion_map.get(conclusion, "unknown")
 
@@ -3550,7 +4037,9 @@ class ReportRenderer:
 
         return "unknown"
 
-    def _apply_status_color_classes(self, item_name: str, status: str, item_type: str = "workflow") -> str:
+    def _apply_status_color_classes(
+        self, item_name: str, status: str, item_type: str = "workflow"
+    ) -> str:
         """
         Apply CSS classes for status color coding.
 
@@ -3576,13 +4065,15 @@ class ReportRenderer:
             "skipped": "status-skipped",
             "no_runs": "status-no-runs",
             "active": "status-success",
-            "unknown": "status-unknown"
+            "unknown": "status-unknown",
         }
 
         css_class = class_map.get(status, "status-unknown")
         return f'<span class="{css_class} {item_type}-status">{item_name}</span>'
 
-    def _construct_github_workflow_url(self, gerrit_project: str, workflow_name: str) -> str:
+    def _construct_github_workflow_url(
+        self, gerrit_project: str, workflow_name: str
+    ) -> str:
         """
         Construct GitHub source URL for a workflow file based on Gerrit project.
 
@@ -3600,7 +4091,9 @@ class ReportRenderer:
         github_repo_name = self._gerrit_to_github_repo_name(gerrit_project)
         return f"https://github.com/onap/{github_repo_name}/blob/master/.github/workflows/{workflow_name}"
 
-    def _construct_github_workflow_actions_url(self, gerrit_project: str, workflow_name: str) -> str:
+    def _construct_github_workflow_actions_url(
+        self, gerrit_project: str, workflow_name: str
+    ) -> str:
         """
         Construct GitHub Actions URL for a workflow based on Gerrit project.
 
@@ -3649,21 +4142,31 @@ class ReportRenderer:
         has_any_jenkins = False
 
         for repo in repositories:
-            workflow_names = repo.get("features", {}).get("workflows", {}).get("workflow_names", [])
+            workflow_names = (
+                repo.get("features", {}).get("workflows", {}).get("workflow_names", [])
+            )
             jenkins_jobs = repo.get("jenkins", {}).get("jobs", [])
-            jenkins_job_names = [job.get("name", "") for job in jenkins_jobs if job.get("name")]
+            jenkins_job_names = [
+                job.get("name", "") for job in jenkins_jobs if job.get("name")
+            ]
 
             if workflow_names or jenkins_job_names:
-                repos_with_cicd.append({
-                    "gerrit_project": repo.get("gerrit_project", "Unknown"),
-                    "workflow_names": workflow_names,
-                    "workflows_data": repo.get("features", {}).get("workflows", {}),  # Include workflow data for status
-                    "features": repo.get("features", {}),  # Include full features data for github_mirror check
-                    "jenkins_jobs": jenkins_jobs,  # Store full job data for status
-                    "jenkins_job_names": jenkins_job_names,
-                    "workflow_count": len(workflow_names),
-                    "job_count": len(jenkins_job_names)
-                })
+                repos_with_cicd.append(
+                    {
+                        "gerrit_project": repo.get("gerrit_project", "Unknown"),
+                        "workflow_names": workflow_names,
+                        "workflows_data": repo.get("features", {}).get(
+                            "workflows", {}
+                        ),  # Include workflow data for status
+                        "features": repo.get(
+                            "features", {}
+                        ),  # Include full features data for github_mirror check
+                        "jenkins_jobs": jenkins_jobs,  # Store full job data for status
+                        "jenkins_job_names": jenkins_job_names,
+                        "workflow_count": len(workflow_names),
+                        "job_count": len(jenkins_job_names),
+                    }
+                )
                 if jenkins_job_names:
                     has_any_jenkins = True
 
@@ -3676,21 +4179,25 @@ class ReportRenderer:
 
         # Build table header based on whether Jenkins jobs exist
         if has_any_jenkins:
-            lines = ["## 🏁 Deployed CI/CD Jobs",
-                     "",
-                     f"**Total GitHub workflows:** {total_workflows}",
-                     f"**Total Jenkins jobs:** {total_jenkins_jobs}",
-                     "",
-                     "| Gerrit Project | GitHub Workflows | Workflow Count | Jenkins Jobs | Job Count |",
-                     "|----------------|-------------------|----------------|--------------|-----------|"]
+            lines = [
+                "## 🏁 Deployed CI/CD Jobs",
+                "",
+                f"**Total GitHub workflows:** {total_workflows}",
+                f"**Total Jenkins jobs:** {total_jenkins_jobs}",
+                "",
+                "| Gerrit Project | GitHub Workflows | Workflow Count | Jenkins Jobs | Job Count |",
+                "|----------------|-------------------|----------------|--------------|-----------|",
+            ]
         else:
-            lines = ["## 🏁 Deployed CI/CD Jobs",
-                     "",
-                     f"**Total GitHub workflows:** {total_workflows}",
-                     f"**Total Jenkins jobs:** {total_jenkins_jobs}",
-                     "",
-                     "| Gerrit Project | GitHub Workflows | Workflow Count | Job Count |",
-                     "|----------------|-------------------|----------------|-----------|"]
+            lines = [
+                "## 🏁 Deployed CI/CD Jobs",
+                "",
+                f"**Total GitHub workflows:** {total_workflows}",
+                f"**Total Jenkins jobs:** {total_jenkins_jobs}",
+                "",
+                "| Gerrit Project | GitHub Workflows | Workflow Count | Job Count |",
+                "|----------------|-------------------|----------------|-----------|",
+            ]
 
         for repo in sorted(repos_with_cicd, key=lambda x: x["gerrit_project"]):
             name = repo["gerrit_project"]
@@ -3703,8 +4210,10 @@ class ReportRenderer:
             # 2. The mirror was explicitly checked on GitHub and not found (reason: "not_found_on_github")
             # Don't flag repos with "no_github_indicators" - they simply don't use GitHub at all
             has_workflows = len(repo.get("workflow_names", [])) > 0
-            mirror_not_found = (github_mirror_info.get("exists") is False and
-                              github_mirror_info.get("reason") == "not_found_on_github")
+            mirror_not_found = (
+                github_mirror_info.get("exists") is False
+                and github_mirror_info.get("reason") == "not_found_on_github"
+            )
 
             if has_workflows and mirror_not_found:
                 # Add warning symbol with CSS tooltip, but keep text normal color
@@ -3717,15 +4226,20 @@ class ReportRenderer:
             # Build workflow names with color coding
             workflow_items = []
             workflows_data = repo.get("workflows_data", {})
-            self.logger.debug(f"[workflows] Processing repo {name}: workflows_data keys={list(workflows_data.keys())}, has_runtime_status={workflows_data.get('has_runtime_status', 'MISSING')}, has_github_mirror={has_github_mirror}")
+            self.logger.debug(
+                f"[workflows] Processing repo {name}: workflows_data keys={list(workflows_data.keys())}, has_runtime_status={workflows_data.get('has_runtime_status', 'MISSING')}, has_github_mirror={has_github_mirror}"
+            )
 
             # Check if we have valid GitHub API data or should fall back to failure status
-            has_github_api_data = (workflows_data.get("has_runtime_status", False) and
-                                 workflows_data.get("github_api_data", {}).get("workflows"))
+            has_github_api_data = workflows_data.get(
+                "has_runtime_status", False
+            ) and workflows_data.get("github_api_data", {}).get("workflows")
 
             if has_github_api_data:
                 # Use GitHub API data for status-aware rendering
-                github_workflows = workflows_data.get("github_api_data", {}).get("workflows", [])
+                github_workflows = workflows_data.get("github_api_data", {}).get(
+                    "workflows", []
+                )
 
                 # Create a map of workflow file names to their execution status using path field
                 workflow_status_map = {}
@@ -3739,53 +4253,92 @@ class ReportRenderer:
                         if file_name in repo["workflow_names"]:
                             # Only process workflows that are enabled/active
                             if workflow.get("state") == "active":
-                                status = self._determine_github_workflow_status(workflow)
+                                status = self._determine_github_workflow_status(
+                                    workflow
+                                )
                                 workflow_status_map[file_name] = status
-                                self.logger.debug(f"[workflows] Path match status mapped: path={workflow_path} file={file_name} status={status}")
+                                self.logger.debug(
+                                    f"[workflows] Path match status mapped: path={workflow_path} file={file_name} status={status}"
+                                )
                             else:
                                 # Disabled workflows get disabled status
                                 workflow_status_map[file_name] = "disabled"
-                                self.logger.debug(f"[workflows] Disabled workflow: path={workflow_path} file={file_name}")
+                                self.logger.debug(
+                                    f"[workflows] Disabled workflow: path={workflow_path} file={file_name}"
+                                )
                         else:
-                            self.logger.debug(f"[workflows] Path basename '{file_name}' not in local workflow_names {repo['workflow_names']} (repo={name})")
+                            self.logger.debug(
+                                f"[workflows] Path basename '{file_name}' not in local workflow_names {repo['workflow_names']} (repo={name})"
+                            )
 
                 # Fallback: attempt to map remaining workflows by GitHub display name when path-based mapping
                 # did not cover all locally discovered workflow files (common with mirrored or renamed workflows)
-                if github_workflows and len(workflow_status_map) < len(repo["workflow_names"]):
-                    remaining = set(repo["workflow_names"]) - set(workflow_status_map.keys())
+                if github_workflows and len(workflow_status_map) < len(
+                    repo["workflow_names"]
+                ):
+                    remaining = set(repo["workflow_names"]) - set(
+                        workflow_status_map.keys()
+                    )
                     if remaining:
-                        self.logger.debug(f"[workflows] Attempting name-based fallback mapping; unmapped local files: {sorted(remaining)} (repo={name})")
+                        self.logger.debug(
+                            f"[workflows] Attempting name-based fallback mapping; unmapped local files: {sorted(remaining)} (repo={name})"
+                        )
                         for workflow in github_workflows:
                             gh_name = workflow.get("name")
                             if not gh_name:
                                 continue
-                            matched_file = self._match_workflow_file_to_github_name(gh_name, repo["workflow_names"])
+                            matched_file = self._match_workflow_file_to_github_name(
+                                gh_name, repo["workflow_names"]
+                            )
                             if matched_file and matched_file not in workflow_status_map:
-                                status = self._determine_github_workflow_status(workflow)
+                                status = self._determine_github_workflow_status(
+                                    workflow
+                                )
                                 workflow_status_map[matched_file] = status
-                                self.logger.debug(f"[workflows] Fallback name match: github_name='{gh_name}' -> file='{matched_file}' status={status} (repo={name})")
+                                self.logger.debug(
+                                    f"[workflows] Fallback name match: github_name='{gh_name}' -> file='{matched_file}' status={status} (repo={name})"
+                                )
 
                 # If still nothing mapped, emit a single debug to aid diagnosis
-                if github_workflows and not workflow_status_map and repo["workflow_names"]:
-                    self.logger.debug(f"[workflows] No workflow runtime statuses mapped (possible API auth/visibility issue) repo={name} github_workflows={len(github_workflows)} local_files={repo['workflow_names']}")
+                if (
+                    github_workflows
+                    and not workflow_status_map
+                    and repo["workflow_names"]
+                ):
+                    self.logger.debug(
+                        f"[workflows] No workflow runtime statuses mapped (possible API auth/visibility issue) repo={name} github_workflows={len(github_workflows)} local_files={repo['workflow_names']}"
+                    )
 
                 # If GitHub API returned no workflows but local files exist, assume API failure
-                elif not github_workflows and repo["workflow_names"] and workflows_data.get("has_runtime_status", False):
-                    self.logger.debug(f"[workflows] GitHub API returned no workflows for {name}, defaulting to unknown status for local workflow files")
+                elif (
+                    not github_workflows
+                    and repo["workflow_names"]
+                    and workflows_data.get("has_runtime_status", False)
+                ):
+                    self.logger.debug(
+                        f"[workflows] GitHub API returned no workflows for {name}, defaulting to unknown status for local workflow files"
+                    )
                     for workflow_name in repo["workflow_names"]:
                         workflow_status_map[workflow_name] = "unknown"
 
                 # Build the list with status information and hyperlinks
                 for workflow_name in sorted(repo["workflow_names"]):
                     status = workflow_status_map.get(workflow_name, "unknown")
-                    colored_name = self._apply_status_color_classes(workflow_name, status, "workflow")
-                    self.logger.debug(f"[workflows] Applied color to {workflow_name}: status={status}, colored_name={colored_name[:100]}...")
+                    colored_name = self._apply_status_color_classes(
+                        workflow_name, status, "workflow"
+                    )
+                    self.logger.debug(
+                        f"[workflows] Applied color to {workflow_name}: status={status}, colored_name={colored_name[:100]}..."
+                    )
 
                     # Find the corresponding workflow data to get URLs
                     workflow_url = None
                     for workflow in github_workflows:
                         workflow_path = workflow.get("path", "")
-                        if workflow_path and os.path.basename(workflow_path) == workflow_name:
+                        if (
+                            workflow_path
+                            and os.path.basename(workflow_path) == workflow_name
+                        ):
                             # Prefer workflow page URL for runs/status over source code URL
                             urls = workflow.get("urls", {})
                             workflow_url = urls.get("workflow_page")
@@ -3803,7 +4356,9 @@ class ReportRenderer:
                             workflow_url = f"https://github.com/{github_owner}/{github_repo}/actions/workflows/{workflow_name}"
                         elif repo.get("gerrit_project"):
                             # Fallback to constructed URL from Gerrit project
-                            workflow_url = self._construct_github_workflow_actions_url(repo["gerrit_project"], workflow_name)
+                            workflow_url = self._construct_github_workflow_actions_url(
+                                repo["gerrit_project"], workflow_name
+                            )
 
                     if workflow_url:
                         linked_name = f'<a href="{workflow_url}" target="_blank">{colored_name}</a>'
@@ -3812,19 +4367,28 @@ class ReportRenderer:
                         workflow_items.append(colored_name)
             else:
                 # Fallback when no GitHub API data is available
-                workflows_data_workflows = workflows_data.get("github_api_data", {}).get("workflows", [])
+                workflows_data_workflows = workflows_data.get(
+                    "github_api_data", {}
+                ).get("workflows", [])
                 for workflow_name in sorted(repo["workflow_names"]):
                     # For workflows that are expected to have status but GitHub API failed,
                     # default to unknown to indicate the monitoring is not working
                     default_status = "unknown"
-                    colored_name = self._apply_status_color_classes(workflow_name, default_status, "workflow")
-                    self.logger.debug(f"[workflows] Fallback color applied to {workflow_name}: status={default_status}, colored_name={colored_name[:100]}...")
+                    colored_name = self._apply_status_color_classes(
+                        workflow_name, default_status, "workflow"
+                    )
+                    self.logger.debug(
+                        f"[workflows] Fallback color applied to {workflow_name}: status={default_status}, colored_name={colored_name[:100]}..."
+                    )
 
                     # Try to find URL from workflows data even without runtime status
                     workflow_url = None
                     for workflow in workflows_data_workflows:
                         workflow_path = workflow.get("path", "")
-                        if workflow_path and os.path.basename(workflow_path) == workflow_name:
+                        if (
+                            workflow_path
+                            and os.path.basename(workflow_path) == workflow_name
+                        ):
                             # Prefer workflow page URL for runs/status over source code URL
                             urls = workflow.get("urls", {})
                             workflow_url = urls.get("workflow_page")
@@ -3842,7 +4406,9 @@ class ReportRenderer:
                             workflow_url = f"https://github.com/{github_owner}/{github_repo}/actions/workflows/{workflow_name}"
                         elif repo.get("gerrit_project"):
                             # Fallback to constructed URL from Gerrit project
-                            workflow_url = self._construct_github_workflow_actions_url(repo["gerrit_project"], workflow_name)
+                            workflow_url = self._construct_github_workflow_actions_url(
+                                repo["gerrit_project"], workflow_name
+                            )
 
                     # Only skip links/colors if the repo has workflows but mirror was not found on GitHub
                     if has_workflows and mirror_not_found:
@@ -3861,14 +4427,18 @@ class ReportRenderer:
             for job in repo["jenkins_jobs"]:
                 job_name = job.get("name", "Unknown")
                 status = self._determine_jenkins_job_status(job)
-                colored_name = self._apply_status_color_classes(job_name, status, "jenkins")
+                colored_name = self._apply_status_color_classes(
+                    job_name, status, "jenkins"
+                )
 
                 # Get Jenkins job URL from URLs structure
                 urls = job.get("urls", {})
                 job_url = urls.get("job_page")
 
                 if job_url:
-                    linked_name = f'<a href="{job_url}" target="_blank">{colored_name}</a>'
+                    linked_name = (
+                        f'<a href="{job_url}" target="_blank">{colored_name}</a>'
+                    )
                     jenkins_items.append(linked_name)
                 else:
                     jenkins_items.append(colored_name)
@@ -3878,31 +4448,43 @@ class ReportRenderer:
             job_count = repo["job_count"]
 
             if has_any_jenkins:
-                lines.append(f"| {project_name} | {workflow_names_str} | {workflow_count} | {jenkins_names_str} | {job_count} |")
+                lines.append(
+                    f"| {project_name} | {workflow_names_str} | {workflow_count} | {jenkins_names_str} | {job_count} |"
+                )
             else:
-                lines.append(f"| {project_name} | {workflow_names_str} | {workflow_count} | {job_count} |")
+                lines.append(
+                    f"| {project_name} | {workflow_names_str} | {workflow_count} | {job_count} |"
+                )
 
-        lines.extend(["", f"**Total:** {len(repos_with_cicd)} repositories with CI/CD jobs"])
+        lines.extend(
+            ["", f"**Total:** {len(repos_with_cicd)} repositories with CI/CD jobs"]
+        )
         return "\n".join(lines)
 
     def _generate_contributors_section(self, data: dict[str, Any]) -> str:
         """Generate consolidated contributors table section."""
         top_commits = data.get("summaries", {}).get("top_contributors_commits", [])
         top_loc = data.get("summaries", {}).get("top_contributors_loc", [])
-        total_authors = data.get("summaries", {}).get("counts", {}).get("total_authors", 0)
+        total_authors = (
+            data.get("summaries", {}).get("counts", {}).get("total_authors", 0)
+        )
 
         sections = ["## 👥 Top Contributors (Last Year)"]
         sections.append(f"**Contributors Found:** {total_authors:,}")
 
         # Generate consolidated table with all contributors
         if top_commits or top_loc:
-            sections.append(self._generate_consolidated_contributors_table(top_commits, top_loc))
+            sections.append(
+                self._generate_consolidated_contributors_table(top_commits, top_loc)
+            )
         else:
             sections.append("No contributor data available.")
 
         return "\n\n".join(sections)
 
-    def _generate_consolidated_contributors_table(self, top_commits: list[dict[str, Any]], top_loc: list[dict[str, Any]]) -> str:
+    def _generate_consolidated_contributors_table(
+        self, top_commits: list[dict[str, Any]], top_loc: list[dict[str, Any]]
+    ) -> str:
         """Generate consolidated contributors table with commits, LOC, and average LOC per commit."""
         # Create a comprehensive list of all contributors from both lists
         contributors_dict = {}
@@ -3926,10 +4508,13 @@ class ReportRenderer:
         all_contributors = list(contributors_dict.values())
 
         # Sort by commits first, then by LOC as secondary sort
-        all_contributors.sort(key=lambda x: (
-            x.get("commits", {}).get("last_365_days", 0),
-            x.get("lines_net", {}).get("last_365_days", 0)
-        ), reverse=True)
+        all_contributors.sort(
+            key=lambda x: (
+                x.get("commits", {}).get("last_365_days", 0),
+                x.get("lines_net", {}).get("last_365_days", 0),
+            ),
+            reverse=True,
+        )
 
         if not all_contributors:
             return "No contributors found."
@@ -3937,7 +4522,7 @@ class ReportRenderer:
         # Create table headers
         lines = [
             "| Rank | Contributor | Commits | LOC | Δ LOC | Avg LOC/Commit | Repositories | Organization |",
-            "|------|-------------|---------|-----|-------|----------------|--------------|--------------|"
+            "|------|-------------|---------|-----|-------|----------------|--------------|--------------|",
         ]
 
         for i, contributor in enumerate(all_contributors, 1):
@@ -3947,7 +4532,9 @@ class ReportRenderer:
             commits_1y = contributor.get("commits", {}).get("last_365_days", 0)
             loc_1y = contributor.get("lines_net", {}).get("last_365_days", 0)
             lines_added_1y = contributor.get("lines_added", {}).get("last_365_days", 0)
-            lines_removed_1y = contributor.get("lines_removed", {}).get("last_365_days", 0)
+            lines_removed_1y = contributor.get("lines_removed", {}).get(
+                "last_365_days", 0
+            )
             delta_loc_1y = abs(lines_added_1y) + abs(lines_removed_1y)
             repos_1y = contributor.get("repositories_count", {}).get("last_365_days", 0)
 
@@ -3963,21 +4550,29 @@ class ReportRenderer:
 
             org_display = domain if domain and domain != "unknown" else "-"
 
-            lines.append(f"| {i} | {display_name} | {commits_1y} | {int(loc_1y):+d} | {delta_loc_1y} | {avg_display} | {repos_1y} | {org_display} |")
+            lines.append(
+                f"| {i} | {display_name} | {commits_1y} | {int(loc_1y):+d} | {delta_loc_1y} | {avg_display} | {repos_1y} | {org_display} |"
+            )
 
         return "\n".join(lines)
 
-    def _generate_contributors_table(self, contributors: list[dict[str, Any]], metric_type: str) -> str:
+    def _generate_contributors_table(
+        self, contributors: list[dict[str, Any]], metric_type: str
+    ) -> str:
         """Generate contributors table for commits or LOC."""
         if not contributors:
             return "No contributors found."
 
         if metric_type == "commits":
-            lines = ["| Rank | Contributor | Commits | Repositories | Organization |",
-                     "|------|-------------|---------|--------------|--------------|"]
+            lines = [
+                "| Rank | Contributor | Commits | Repositories | Organization |",
+                "|------|-------------|---------|--------------|--------------|",
+            ]
         else:
-            lines = ["| Rank | Contributor | LOC | Commits | Repositories | Organization |",
-                     "|------|-------------|---------|---------|--------------|--------------|"]
+            lines = [
+                "| Rank | Contributor | LOC | Commits | Repositories | Organization |",
+                "|------|-------------|---------|---------|--------------|--------------|",
+            ]
 
         for i, contributor in enumerate(contributors, 1):
             name = contributor.get("name", "Unknown")
@@ -3993,9 +4588,13 @@ class ReportRenderer:
             org_display = domain if domain and domain != "unknown" else "-"
 
             if metric_type == "commits":
-                lines.append(f"| {i} | {display_name} | {commits_1y} | {repos_1y} | {org_display} |")
+                lines.append(
+                    f"| {i} | {display_name} | {commits_1y} | {repos_1y} | {org_display} |"
+                )
             else:
-                lines.append(f"| {i} | {display_name} | {int(loc_1y):+d} | {commits_1y} | {repos_1y} | {org_display} |")
+                lines.append(
+                    f"| {i} | {display_name} | {int(loc_1y):+d} | {commits_1y} | {repos_1y} | {org_display} |"
+                )
 
         return "\n".join(lines)
 
@@ -4006,13 +4605,19 @@ class ReportRenderer:
         if not top_orgs:
             return "## 🏢 Organizations\n\nNo organization data available."
 
-        total_orgs = data.get("summaries", {}).get("counts", {}).get("total_organizations", 0)
+        total_orgs = (
+            data.get("summaries", {}).get("counts", {}).get("total_organizations", 0)
+        )
 
         lines = ["## 🏢 Top Organizations (Last Year)"]
         lines.append(f"**Organizations Found:** {total_orgs:,}")
         lines.append("")
-        lines.append("| Rank | Organization | Contributors | Commits | LOC | Δ LOC | Avg LOC/Commit | Unique Repositories |")
-        lines.append("|------|--------------|--------------|---------|-----|-------|----------------|---------------------|")
+        lines.append(
+            "| Rank | Organization | Contributors | Commits | LOC | Δ LOC | Avg LOC/Commit | Unique Repositories |"
+        )
+        lines.append(
+            "|------|--------------|--------------|---------|-----|-------|----------------|---------------------|"
+        )
 
         for i, org in enumerate(top_orgs, 1):
             domain = org.get("domain", "Unknown")
@@ -4031,7 +4636,9 @@ class ReportRenderer:
             else:
                 avg_display = "-"
 
-            lines.append(f"| {i} | {domain} | {contributors} | {commits_1y} | {int(loc_1y):+d} | {delta_loc_1y} | {avg_display} | {repos_1y} |")
+            lines.append(
+                f"| {i} | {domain} | {contributors} | {commits_1y} | {int(loc_1y):+d} | {delta_loc_1y} | {avg_display} | {repos_1y} |"
+            )
 
         return "\n".join(lines)
 
@@ -4043,18 +4650,26 @@ class ReportRenderer:
             return "## 🔧 Gerrit Project Feature Matrix\n\nNo projects analyzed."
 
         # Sort repositories by primary metric (commits in last year)
-        sorted_repos = sorted(repositories,
-                             key=lambda r: r.get("commit_counts", {}).get("last_365_days", 0),
-                             reverse=True)
+        sorted_repos = sorted(
+            repositories,
+            key=lambda r: r.get("commit_counts", {}).get("last_365_days", 0),
+            reverse=True,
+        )
 
         # Get activity thresholds for definition
-        current_threshold = self.config.get("activity_thresholds", {}).get("current_days", 365)
-        active_threshold = self.config.get("activity_thresholds", {}).get("active_days", 1095)
+        current_threshold = self.config.get("activity_thresholds", {}).get(
+            "current_days", 365
+        )
+        active_threshold = self.config.get("activity_thresholds", {}).get(
+            "active_days", 1095
+        )
 
-        lines = ["## 🔧 Gerrit Project Feature Matrix",
-                 "",
-                 "| Gerrit Project | Type | Dependabot | Pre-commit | ReadTheDocs | .gitreview | G2G | Status |",
-                 "|------------|------|------------|------------|-------------|------------|-----|--------|"]
+        lines = [
+            "## 🔧 Gerrit Project Feature Matrix",
+            "",
+            "| Gerrit Project | Type | Dependabot | Pre-commit | ReadTheDocs | .gitreview | G2G | Status |",
+            "|------------|------|------------|------------|-------------|------------|-----|--------|",
+        ]
 
         for repo in sorted_repos:
             name = repo.get("gerrit_project", "Unknown")
@@ -4065,21 +4680,27 @@ class ReportRenderer:
             project_types = features.get("project_types", {})
             primary_type = project_types.get("primary_type", "unknown")
 
-            dependabot = "✅" if features.get("dependabot", {}).get("present", False) else "❌"
-            pre_commit = "✅" if features.get("pre_commit", {}).get("present", False) else "❌"
-            readthedocs = "✅" if features.get("readthedocs", {}).get("present", False) else "❌"
-            gitreview = "✅" if features.get("gitreview", {}).get("present", False) else "❌"
+            dependabot = (
+                "✅" if features.get("dependabot", {}).get("present", False) else "❌"
+            )
+            pre_commit = (
+                "✅" if features.get("pre_commit", {}).get("present", False) else "❌"
+            )
+            readthedocs = (
+                "✅" if features.get("readthedocs", {}).get("present", False) else "❌"
+            )
+            gitreview = (
+                "✅" if features.get("gitreview", {}).get("present", False) else "❌"
+            )
             g2g = "✅" if features.get("g2g", {}).get("present", False) else "❌"
 
             # Map activity status to display format (emoji only)
-            status_map = {
-                "current": "✅",
-                "active": "☑️",
-                "inactive": "🛑"
-            }
+            status_map = {"current": "✅", "active": "☑️", "inactive": "🛑"}
             status = status_map.get(activity_status, "🛑")
 
-            lines.append(f"| {name} | {primary_type} | {dependabot} | {pre_commit} | {readthedocs} | {gitreview} | {g2g} | {status} |")
+            lines.append(
+                f"| {name} | {primary_type} | {dependabot} | {pre_commit} | {readthedocs} | {gitreview} | {g2g} | {status} |"
+            )
 
         return "\n".join(lines)
 
@@ -4100,7 +4721,7 @@ class ReportRenderer:
             f"**Total Orphaned Jobs:** {total_orphaned}",
             "",
             "These Jenkins jobs belong to archived or read-only Gerrit projects and should likely be removed:",
-            ""
+            "",
         ]
 
         # Summary by project state
@@ -4112,37 +4733,43 @@ class ReportRenderer:
             lines.append("")
 
         # Detailed table
-        lines.extend([
-            "### Detailed Job Listing",
-            "",
-            "| Job Name | Gerrit Project | Project State | Match Score |",
-            "|----------|----------------|---------------|-------------|"
-        ])
+        lines.extend(
+            [
+                "### Detailed Job Listing",
+                "",
+                "| Job Name | Gerrit Project | Project State | Match Score |",
+                "|----------|----------------|---------------|-------------|",
+            ]
+        )
 
         # Sort jobs by project name for better organization
-        sorted_jobs = sorted(jobs.items(), key=lambda x: x[1].get('project_name', ''))
+        sorted_jobs = sorted(jobs.items(), key=lambda x: x[1].get("project_name", ""))
 
         for job_name, job_info in sorted_jobs:
-            project_name = job_info.get('project_name', 'Unknown')
-            state = job_info.get('state', 'UNKNOWN')
-            score = job_info.get('score', 0)
+            project_name = job_info.get("project_name", "Unknown")
+            state = job_info.get("state", "UNKNOWN")
+            score = job_info.get("score", 0)
 
             # Color-code based on state
-            if state == 'READ_ONLY':
+            if state == "READ_ONLY":
                 state_display = f"🔒 {state}"
-            elif state == 'HIDDEN':
+            elif state == "HIDDEN":
                 state_display = f"👻 {state}"
             else:
                 state_display = f"❓ {state}"
 
-            lines.append(f"| `{job_name}` | `{project_name}` | {state_display} | {score} |")
+            lines.append(
+                f"| `{job_name}` | `{project_name}` | {state_display} | {score} |"
+            )
 
-        lines.extend([
-            "",
-            "**Recommendation:** Review these jobs and remove them if they are no longer needed, ",
-            "since their associated Gerrit projects are archived or read-only.",
-            ""
-        ])
+        lines.extend(
+            [
+                "",
+                "**Recommendation:** Review these jobs and remove them if they are no longer needed, ",
+                "since their associated Gerrit projects are archived or read-only.",
+                "",
+            ]
+        )
 
         return "\n".join(lines)
 
@@ -4436,7 +5063,7 @@ class ReportRenderer:
         import re
 
         html_lines = []
-        lines = markdown.split('\n')
+        lines = markdown.split("\n")
         in_table = False
 
         i = 0
@@ -4444,24 +5071,27 @@ class ReportRenderer:
             line = lines[i]
 
             # Headers
-            if line.startswith('# '):
+            if line.startswith("# "):
                 content = line[2:].strip()
                 html_lines.append(f'<h1 id="{self._slugify(content)}">{content}</h1>')
-            elif line.startswith('## '):
+            elif line.startswith("## "):
                 content = line[3:].strip()
                 html_lines.append(f'<h2 id="{self._slugify(content)}">{content}</h2>')
-            elif line.startswith('### '):
+            elif line.startswith("### "):
                 content = line[4:].strip()
                 html_lines.append(f'<h3 id="{self._slugify(content)}">{content}</h3>')
 
             # Tables
-            elif '|' in line and line.strip():
+            elif "|" in line and line.strip():
                 if not in_table:
                     # Check if this table will have headers by looking ahead
-                    has_headers = (i + 1 < len(lines) and
-                                 re.match(r'^\|[\s\-\|]+\|$', lines[i + 1].strip()))
+                    has_headers = i + 1 < len(lines) and re.match(
+                        r"^\|[\s\-\|]+\|$", lines[i + 1].strip()
+                    )
                     # Only add sortable class if feature is enabled and table has headers
-                    sortable_enabled = self.config.get("html_tables", {}).get("sortable", True)
+                    sortable_enabled = self.config.get("html_tables", {}).get(
+                        "sortable", True
+                    )
 
                     # Check if this is the feature matrix table or combined repositories table by looking for specific headers
                     is_feature_matrix = False
@@ -4470,18 +5100,39 @@ class ReportRenderer:
                     is_global_summary = False
                     if has_headers and i < len(lines):
                         table_header = line.lower()
-                        if 'gerrit project' in table_header and 'dependabot' in table_header and 'pre-commit' in table_header:
+                        if (
+                            "gerrit project" in table_header
+                            and "dependabot" in table_header
+                            and "pre-commit" in table_header
+                        ):
                             is_feature_matrix = True
-                        elif 'gerrit project' in table_header and ('github workflows' in table_header or 'jenkins jobs' in table_header):
+                        elif "gerrit project" in table_header and (
+                            "github workflows" in table_header
+                            or "jenkins jobs" in table_header
+                        ):
                             is_cicd_jobs = True
-                        elif 'gerrit project' in table_header and 'commits' in table_header and 'status' in table_header:
+                        elif (
+                            "gerrit project" in table_header
+                            and "commits" in table_header
+                            and "status" in table_header
+                        ):
                             is_all_repositories = True
-                        elif 'metric' in table_header and 'count' in table_header and 'percentage' in table_header:
+                        elif (
+                            "metric" in table_header
+                            and "count" in table_header
+                            and "percentage" in table_header
+                        ):
                             is_global_summary = True
 
-                    table_class = ' class="sortable"' if (has_headers and sortable_enabled) else ''
+                    table_class = (
+                        ' class="sortable"'
+                        if (has_headers and sortable_enabled)
+                        else ""
+                    )
                     if is_feature_matrix:
-                        table_class = ' class="sortable no-pagination feature-matrix-table"'
+                        table_class = (
+                            ' class="sortable no-pagination feature-matrix-table"'
+                        )
                     elif is_cicd_jobs:
                         table_class = ' class="sortable no-pagination cicd-jobs-table"'
                     elif is_all_repositories:
@@ -4489,72 +5140,75 @@ class ReportRenderer:
                     elif is_global_summary:
                         table_class = ' class="no-search no-pagination"'
 
-                    html_lines.append(f'<table{table_class}>')
+                    html_lines.append(f"<table{table_class}>")
                     in_table = True
 
                 # Check if this is a header separator line
-                if re.match(r'^\|[\s\-\|]+\|$', line.strip()):
+                if re.match(r"^\|[\s\-\|]+\|$", line.strip()):
                     # Skip separator line
                     pass
                 else:
                     # Regular table row
-                    cells = [cell.strip() for cell in line.split('|')[1:-1]]  # Remove empty first/last
+                    cells = [
+                        cell.strip() for cell in line.split("|")[1:-1]
+                    ]  # Remove empty first/last
 
                     # Determine if this is likely a header row (check next line)
-                    is_header = (i + 1 < len(lines) and
-                               re.match(r'^\|[\s\-\|]+\|$', lines[i + 1].strip()))
+                    is_header = i + 1 < len(lines) and re.match(
+                        r"^\|[\s\-\|]+\|$", lines[i + 1].strip()
+                    )
 
                     if is_header:
-                        html_lines.append('<thead><tr>')
+                        html_lines.append("<thead><tr>")
                         for cell in cells:
-                            html_lines.append(f'<th>{cell}</th>')
-                        html_lines.append('</tr></thead><tbody>')
+                            html_lines.append(f"<th>{cell}</th>")
+                        html_lines.append("</tr></thead><tbody>")
                     else:
-                        html_lines.append('<tr>')
+                        html_lines.append("<tr>")
                         for cell in cells:
-                            html_lines.append(f'<td>{cell}</td>')
-                        html_lines.append('</tr>')
+                            html_lines.append(f"<td>{cell}</td>")
+                        html_lines.append("</tr>")
 
             # End table when we hit a non-table line
-            elif in_table and not ('|' in line and line.strip()):
-                html_lines.append('</tbody></table>')
+            elif in_table and not ("|" in line and line.strip()):
+                html_lines.append("</tbody></table>")
                 in_table = False
                 # Process this line normally
                 if line.strip():
-                    html_lines.append(f'<p>{line}</p>')
+                    html_lines.append(f"<p>{line}</p>")
                 else:
-                    html_lines.append('')
+                    html_lines.append("")
 
             # Regular paragraphs
             elif line.strip() and not in_table:
                 # Bold text
-                line = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', line)
+                line = re.sub(r"\*\*(.*?)\*\*", r"<strong>\1</strong>", line)
                 # Code blocks
-                line = re.sub(r'`(.*?)`', r'<code>\1</code>', line)
-                html_lines.append(f'<p>{line}</p>')
+                line = re.sub(r"`(.*?)`", r"<code>\1</code>", line)
+                html_lines.append(f"<p>{line}</p>")
 
             # Empty lines
             else:
                 if not in_table:
-                    html_lines.append('')
+                    html_lines.append("")
 
             i += 1
 
         # Close table if still open
         if in_table:
-            html_lines.append('</tbody></table>')
+            html_lines.append("</tbody></table>")
 
-        return '\n'.join(html_lines)
+        return "\n".join(html_lines)
 
     def _get_datatable_css(self) -> str:
         """Get Simple-DataTables CSS if sorting is enabled."""
         if not self.config.get("html_tables", {}).get("sortable", True):
             return ""
 
-        return '''
+        return """
     <!-- Simple-DataTables CSS -->
     <link href="https://cdn.jsdelivr.net/npm/simple-datatables@latest/dist/style.css" rel="stylesheet" type="text/css">
-    '''
+    """
 
     def _get_datatable_js(self) -> str:
         """Get Simple-DataTables JavaScript if sorting is enabled."""
@@ -4562,13 +5216,19 @@ class ReportRenderer:
             return ""
 
         min_rows = self.config.get("html_tables", {}).get("min_rows_for_sorting", 3)
-        searchable = str(self.config.get("html_tables", {}).get("searchable", True)).lower()
+        searchable = str(
+            self.config.get("html_tables", {}).get("searchable", True)
+        ).lower()
         sortable = str(self.config.get("html_tables", {}).get("sortable", True)).lower()
-        pagination = str(self.config.get("html_tables", {}).get("pagination", True)).lower()
+        pagination = str(
+            self.config.get("html_tables", {}).get("pagination", True)
+        ).lower()
         per_page = self.config.get("html_tables", {}).get("entries_per_page", 50)
-        page_options = self.config.get("html_tables", {}).get("page_size_options", [20, 50, 100, 200])
+        page_options = self.config.get("html_tables", {}).get(
+            "page_size_options", [20, 50, 100, 200]
+        )
 
-        return f'''
+        return f"""
     <!-- Simple-DataTables JavaScript -->
     <script src="https://cdn.jsdelivr.net/npm/simple-datatables@latest" type="text/javascript"></script>
     <script>
@@ -4607,14 +5267,15 @@ class ReportRenderer:
                 }});
             }});
         }});
-    </script>'''
+    </script>"""
 
     def _slugify(self, text: str) -> str:
         """Convert text to URL-friendly slug."""
         import re
+
         # Remove emojis and special chars, convert to lowercase
-        slug = re.sub(r'[^\w\s-]', '', text).strip().lower()
-        slug = re.sub(r'[\s_-]+', '-', slug)
+        slug = re.sub(r"[^\w\s-]", "", text).strip().lower()
+        slug = re.sub(r"[\s_-]+", "-", slug)
         return slug
 
     def _format_number(self, num: Union[int, float], signed: bool = False) -> str:
@@ -4646,6 +5307,7 @@ class ReportRenderer:
     def _format_age(self, days: int) -> str:
         """Format age in days to actual date."""
         from datetime import datetime, timedelta
+
         if days is None or days == 999999:
             return "Unknown"
 
@@ -4654,17 +5316,20 @@ class ReportRenderer:
         return date.strftime("%Y-%m-%d")
 
 
-
 # =============================================================================
 # PACKAGING AND ZIP CREATION (Phase 5)
 # =============================================================================
 
+
 def save_resolved_config(config: Dict[str, Any], output_path: Path) -> None:
     """Save the resolved configuration to a JSON file."""
-    with open(output_path, 'w', encoding='utf-8') as f:
+    with open(output_path, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2, default=str)
 
-def create_report_bundle(project_output_dir: Path, project: str, logger: logging.Logger) -> Path:
+
+def create_report_bundle(
+    project_output_dir: Path, project: str, logger: logging.Logger
+) -> Path:
     """
     Package all report artifacts into a ZIP file.
 
@@ -4674,7 +5339,7 @@ def create_report_bundle(project_output_dir: Path, project: str, logger: logging
 
     zip_path = project_output_dir / f"{project}_report_bundle.zip"
 
-    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
         # Add all files in the project output directory (except the ZIP itself)
         for file_path in project_output_dir.iterdir():
             if file_path.is_file() and file_path != zip_path:
@@ -4686,9 +5351,11 @@ def create_report_bundle(project_output_dir: Path, project: str, logger: logging
     logger.info(f"Report bundle created: {zip_path}")
     return zip_path
 
+
 # =============================================================================
 # UTILITY FUNCTIONS
 # =============================================================================
+
 
 def format_number(value: Union[int, float], config: Dict[str, Any]) -> str:
     """Format numbers with optional abbreviation."""
@@ -4701,15 +5368,17 @@ def format_number(value: Union[int, float], config: Dict[str, Any]) -> str:
 
     if value >= threshold:
         if value >= 1_000_000:
-            return f"{value/1_000_000:.1f}M"
+            return f"{value / 1_000_000:.1f}M"
         elif value >= 1_000:
-            return f"{value/1_000:.1f}k"
+            return f"{value / 1_000:.1f}k"
 
     return str(value)
+
 
 def format_age_days(days: int) -> str:
     """Format age in days to actual date."""
     from datetime import datetime, timedelta
+
     if days is None or days == 0:
         return datetime.now().strftime("%Y-%m-%d")
 
@@ -4717,7 +5386,10 @@ def format_age_days(days: int) -> str:
     date = datetime.now() - timedelta(days=days)
     return date.strftime("%Y-%m-%d")
 
-def safe_git_command(cmd: list[str], cwd: Path | None, logger: logging.Logger) -> tuple[bool, str]:
+
+def safe_git_command(
+    cmd: list[str], cwd: Path | None, logger: logging.Logger
+) -> tuple[bool, str]:
     """
     Execute a git command safely with error handling.
 
@@ -4732,7 +5404,10 @@ def safe_git_command(cmd: list[str], cwd: Path | None, logger: logging.Logger) -
             text=True,
             timeout=300,  # 5 minute timeout
         )
-        return git_result.returncode == 0, git_result.stdout.strip() or git_result.stderr.strip()
+        return (
+            git_result.returncode == 0,
+            git_result.stdout.strip() or git_result.stderr.strip(),
+        )
     except subprocess.CalledProcessError as e:
         logger.warning(f"Git command failed in {cwd}: {' '.join(cmd)} - {e.stderr}")
         return False, e.stderr
@@ -4743,9 +5418,11 @@ def safe_git_command(cmd: list[str], cwd: Path | None, logger: logging.Logger) -
         logger.error(f"Unexpected error running git command in {cwd}: {e}")
         return False, str(e)
 
+
 # =============================================================================
 # MAIN ORCHESTRATION AND CLI ENTRY POINT
 # =============================================================================
+
 
 class RepositoryReporter:
     """Main orchestrator for repository reporting."""
@@ -4764,19 +5441,25 @@ class RepositoryReporter:
         info_master_url = "ssh://modesevenindustrialsolutions@gerrit.linuxfoundation.org:29418/releng/info-master"
 
         if info_master_path.exists():
-            self.logger.info(f"Info-master repository already exists at {info_master_path}")
+            self.logger.info(
+                f"Info-master repository already exists at {info_master_path}"
+            )
             # Update existing repository
-            success, output = safe_git_command(["git", "pull"], info_master_path, self.logger)
+            success, output = safe_git_command(
+                ["git", "pull"], info_master_path, self.logger
+            )
             if success:
                 self.logger.info("Successfully updated info-master repository")
             else:
-                self.logger.warning(f"Failed to update info-master repository: {output}")
+                self.logger.warning(
+                    f"Failed to update info-master repository: {output}"
+                )
         else:
             self.logger.info(f"Cloning info-master repository to {info_master_path}")
             success, output = safe_git_command(
                 ["git", "clone", info_master_url, str(info_master_path)],
                 repos_path,
-                self.logger
+                self.logger,
             )
             if success:
                 self.logger.info("Successfully cloned info-master repository")
@@ -4808,12 +5491,14 @@ class RepositoryReporter:
             "authors": [],
             "organizations": [],
             "summaries": {},
-            "errors": []
+            "errors": [],
         }
 
         # Update git collector with time windows
 
-        self.git_collector.time_windows = cast(dict[str, dict[str, Any]], report_data["time_windows"])
+        self.git_collector.time_windows = cast(
+            dict[str, dict[str, Any]], report_data["time_windows"]
+        )
 
         # Update git collector with repos_path for relative path calculation
         self.git_collector.repos_path = repos_path_abs
@@ -4837,19 +5522,32 @@ class RepositoryReporter:
         report_data["repositories"] = successful_repos
 
         # Aggregate data (pass repository records directly)
-        report_data["authors"] = self.aggregator.compute_author_rollups(successful_repos)
-        report_data["organizations"] = self.aggregator.compute_org_rollups(report_data["authors"])
-        report_data["summaries"] = self.aggregator.aggregate_global_data(successful_repos)
+        report_data["authors"] = self.aggregator.compute_author_rollups(
+            successful_repos
+        )
+        report_data["organizations"] = self.aggregator.compute_org_rollups(
+            report_data["authors"]
+        )
+        report_data["summaries"] = self.aggregator.aggregate_global_data(
+            successful_repos
+        )
 
         # Log comprehensive Jenkins job allocation summary for auditing
-        if self.git_collector.jenkins_client and self.git_collector._jenkins_initialized:
+        if (
+            self.git_collector.jenkins_client
+            and self.git_collector._jenkins_initialized
+        ):
             allocation_summary = self.git_collector.get_jenkins_job_allocation_summary()
 
             self.logger.info(f"Jenkins job allocation summary:")
-            self.logger.info(f"  Total jobs: {allocation_summary['total_jenkins_jobs']}")
+            self.logger.info(
+                f"  Total jobs: {allocation_summary['total_jenkins_jobs']}"
+            )
             self.logger.info(f"  Allocated: {allocation_summary['allocated_jobs']}")
             self.logger.info(f"  Unallocated: {allocation_summary['unallocated_jobs']}")
-            self.logger.info(f"  Allocation rate: {allocation_summary['allocation_percentage']}%")
+            self.logger.info(
+                f"  Allocation rate: {allocation_summary['allocation_percentage']}%"
+            )
 
             # Validate allocation and report any issues
             validation_issues = self.git_collector.validate_jenkins_job_allocation()
@@ -4859,17 +5557,25 @@ class RepositoryReporter:
                     self.logger.error(f"  - {issue}")
 
                 # Infrastructure jobs are not fatal - only log as warning
-                self.logger.warning("Some Jenkins jobs could not be allocated, but continuing with report generation")
+                self.logger.warning(
+                    "Some Jenkins jobs could not be allocated, but continuing with report generation"
+                )
 
                 # Get final counts for reporting
-                allocation_summary = self.git_collector.get_jenkins_job_allocation_summary()
-                orphaned_summary = self.git_collector.get_orphaned_jenkins_jobs_summary()
+                allocation_summary = (
+                    self.git_collector.get_jenkins_job_allocation_summary()
+                )
+                orphaned_summary = (
+                    self.git_collector.get_orphaned_jenkins_jobs_summary()
+                )
 
                 total_jobs = allocation_summary.get("total_jenkins_jobs", 0)
                 allocated_jobs = allocation_summary.get("allocated_jobs", 0)
                 orphaned_jobs = orphaned_summary.get("total_orphaned_jobs", 0)
 
-                self.logger.info(f"Final Jenkins job allocation: {allocated_jobs}/{total_jobs} active, {orphaned_jobs} orphaned")
+                self.logger.info(
+                    f"Final Jenkins job allocation: {allocated_jobs}/{total_jobs} active, {orphaned_jobs} orphaned"
+                )
             else:
                 self.logger.info("Jenkins job allocation validation: No issues found")
 
@@ -4880,11 +5586,15 @@ class RepositoryReporter:
             orphaned_summary = self.git_collector.get_orphaned_jenkins_jobs_summary()
             report_data["orphaned_jenkins_jobs"] = orphaned_summary
             if orphaned_summary["total_orphaned_jobs"] > 0:
-                self.logger.info(f"Found {orphaned_summary['total_orphaned_jobs']} Jenkins jobs belonging to archived Gerrit projects")
+                self.logger.info(
+                    f"Found {orphaned_summary['total_orphaned_jobs']} Jenkins jobs belonging to archived Gerrit projects"
+                )
                 for state, count in orphaned_summary["by_state"].items():
                     self.logger.info(f"  - {count} jobs for {state} projects")
 
-        self.logger.info(f"Analysis complete: {len(report_data['repositories'])} repositories, {len(report_data['errors'])} errors")
+        self.logger.info(
+            f"Analysis complete: {len(report_data['repositories'])} repositories, {len(report_data['errors'])} errors"
+        )
 
         return report_data
 
@@ -4914,7 +5624,9 @@ class RepositoryReporter:
         generated_files["json"] = json_path
 
         # Generate Markdown report
-        markdown_content = self.renderer.render_markdown_report(report_data, markdown_path)
+        markdown_content = self.renderer.render_markdown_report(
+            report_data, markdown_path
+        )
         generated_files["markdown"] = markdown_path
 
         # Generate HTML report (if not disabled)
@@ -4961,14 +5673,20 @@ class RepositoryReporter:
                         # Validate against Gerrit API cache if available
                         if getattr(self.git_collector, "gerrit_projects_cache", None):
                             if rel_path in self.git_collector.gerrit_projects_cache:
-                                self.logger.debug(f"Verified {rel_path} exists in Gerrit")
+                                self.logger.debug(
+                                    f"Verified {rel_path} exists in Gerrit"
+                                )
                             else:
-                                self.logger.warning(f"Repository {rel_path} not found in Gerrit API cache")
+                                self.logger.warning(
+                                    f"Repository {rel_path} not found in Gerrit API cache"
+                                )
 
                         repo_dirs.append(repo_dir)
                 except (PermissionError, OSError) as e:
                     access_errors += 1
-                    self.logger.debug(f"Cannot access potential repository at {git_dir}: {e}")
+                    self.logger.debug(
+                        f"Cannot access potential repository at {git_dir}: {e}"
+                    )
         except (PermissionError, OSError) as e:
             self.logger.warning(f"Error during repository discovery: {e}")
 
@@ -4979,11 +5697,15 @@ class RepositoryReporter:
 
         self.logger.info(f"Discovered {len(unique_repos)} git repositories")
         if access_errors:
-            self.logger.debug(f"Encountered {access_errors} access errors during discovery")
+            self.logger.debug(
+                f"Encountered {access_errors} access errors during discovery"
+            )
 
         return unique_repos
 
-    def _analyze_repositories_parallel(self, repo_dirs: list[Path]) -> list[dict[str, Any]]:
+    def _analyze_repositories_parallel(
+        self, repo_dirs: list[Path]
+    ) -> list[dict[str, Any]]:
         """Analyze repositories with optional concurrency."""
         max_workers = self.config.get("performance", {}).get("max_workers", 8)
 
@@ -4994,8 +5716,10 @@ class RepositoryReporter:
         # Concurrent processing
         results = []
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_repo = {executor.submit(self._analyze_single_repository, repo_dir): repo_dir
-                             for repo_dir in repo_dirs}
+            future_to_repo = {
+                executor.submit(self._analyze_single_repository, repo_dir): repo_dir
+                for repo_dir in repo_dirs
+            }
 
             for future in concurrent.futures.as_completed(future_to_repo):
                 repo_dir = future_to_repo[future]
@@ -5004,11 +5728,13 @@ class RepositoryReporter:
                     results.append(result)
                 except Exception as e:
                     self.logger.error(f"Failed to analyze {repo_dir.name}: {e}")
-                    results.append({
-                        "error": str(e),
-                        "repo": repo_dir.name,
-                        "category": "analysis_failure"
-                    })
+                    results.append(
+                        {
+                            "error": str(e),
+                            "repo": repo_dir.name,
+                            "category": "analysis_failure",
+                        }
+                    )
 
         return results
 
@@ -5031,8 +5757,9 @@ class RepositoryReporter:
             return {
                 "error": str(e),
                 "repo": repo_path.name,
-                "category": "repository_analysis"
+                "category": "repository_analysis",
             }
+
 
 def parse_arguments() -> argparse.Namespace:
     """Parse command line arguments."""
@@ -5044,20 +5771,20 @@ Examples:
   %(prog)s --project onap --repos-path /path/to/repos
   %(prog)s --project oran-sc --config-dir ./config --output-dir ./reports
   %(prog)s --project test --repos-path ./test-repos --no-html --verbose
-        """
+        """,
     )
 
     # Required arguments
     parser.add_argument(
         "--project",
         required=True,
-        help="Project name (used for config override and output naming)"
+        help="Project name (used for config override and output naming)",
     )
     parser.add_argument(
         "--repos-path",
         required=True,
         type=Path,
-        help="Path to directory containing cloned repositories"
+        help="Path to directory containing cloned repositories",
     )
 
     # Optional configuration
@@ -5065,51 +5792,41 @@ Examples:
         "--config-dir",
         type=Path,
         default=DEFAULT_CONFIG_DIR,
-        help=f"Configuration directory (default: {DEFAULT_CONFIG_DIR})"
+        help=f"Configuration directory (default: {DEFAULT_CONFIG_DIR})",
     )
     parser.add_argument(
         "--output-dir",
         type=Path,
         default=DEFAULT_OUTPUT_DIR,
-        help=f"Output directory (default: {DEFAULT_OUTPUT_DIR})"
+        help=f"Output directory (default: {DEFAULT_OUTPUT_DIR})",
     )
 
     # Output options
     parser.add_argument(
-        "--no-html",
-        action="store_true",
-        help="Skip HTML report generation"
+        "--no-html", action="store_true", help="Skip HTML report generation"
     )
     parser.add_argument(
-        "--no-zip",
-        action="store_true",
-        help="Skip ZIP bundle creation"
+        "--no-zip", action="store_true", help="Skip ZIP bundle creation"
     )
 
     # Behavioral options
     parser.add_argument(
-        "--verbose", "-v",
-        action="store_true",
-        help="Enable verbose logging"
+        "--verbose", "-v", action="store_true", help="Enable verbose logging"
     )
     parser.add_argument(
-        "--cache",
-        action="store_true",
-        help="Enable caching of git metrics"
+        "--cache", action="store_true", help="Enable caching of git metrics"
     )
     parser.add_argument(
-        "--validate-only",
-        action="store_true",
-        help="Validate configuration and exit"
+        "--validate-only", action="store_true", help="Validate configuration and exit"
     )
     parser.add_argument(
         "--log-level",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
-        help="Override log level from configuration"
+        help="Override log level from configuration",
     )
 
-
     return parser.parse_args()
+
 
 def main() -> int:
     """Main entry point."""
@@ -5130,13 +5847,11 @@ def main() -> int:
         elif args.verbose:
             config.setdefault("logging", {})["level"] = "DEBUG"
 
-
-
         # Setup logging
         log_config = config.get("logging", {})
         logger = setup_logging(
             level=log_config.get("level", "INFO"),
-            include_timestamps=log_config.get("include_timestamps", True)
+            include_timestamps=log_config.get("include_timestamps", True),
         )
 
         logger.info(f"Repository Reporting System v{SCRIPT_VERSION}")
@@ -5149,7 +5864,9 @@ def main() -> int:
             print(f"✅ Configuration valid for project '{args.project}'")
             print(f"   - Schema version: {config.get('schema_version', 'Unknown')}")
             print(f"   - Time windows: {list(config.get('time_windows', {}).keys())}")
-            print(f"   - Features enabled: {len(config.get('features', {}).get('enabled', []))}")
+            print(
+                f"   - Features enabled: {len(config.get('features', {}).get('enabled', []))}"
+            )
             return 0
 
         # Create output directory
@@ -5172,10 +5889,10 @@ def main() -> int:
         # Write JSON report
         reporter.renderer.render_json_report(report_data, json_path)
 
-
-
         # Generate Markdown report
-        markdown_content = reporter.renderer.render_markdown_report(report_data, md_path)
+        markdown_content = reporter.renderer.render_markdown_report(
+            report_data, md_path
+        )
 
         # Generate HTML report (unless disabled)
         if not args.no_html:
@@ -5208,6 +5925,7 @@ def main() -> int:
     except Exception as e:
         print(f"❌ Unexpected error: {e}", file=sys.stderr)
         return 1
+
 
 if __name__ == "__main__":
     sys.exit(main())
