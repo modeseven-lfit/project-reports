@@ -148,23 +148,80 @@ def load_configuration(config_dir: Path, project: str) -> dict[str, Any]:
     Returns:
         Merged configuration dictionary
     """
+    import sys
+
     template_path = config_dir / "template.config"
-    project_path = config_dir / f"{project}.config"
+
+    # Try to find project config file case-insensitively
+    project_path = None
+    project_config_name = f"{project}.config"
+
+    # First try exact match
+    exact_match = config_dir / project_config_name
+    if exact_match.exists():
+        project_path = exact_match
+        print(
+            f"📝 Loading project config (exact match): {project_path}", file=sys.stderr
+        )
+    else:
+        # Try case-insensitive search
+        for config_file in config_dir.glob("*.config"):
+            if config_file.name.lower() == project_config_name.lower():
+                project_path = config_file
+                print(
+                    f"📝 Loading project config (case-insensitive match): {project_path}",
+                    file=sys.stderr,
+                )
+                print(
+                    f"   Note: Project name '{project}' matched config file '{config_file.name}'",
+                    file=sys.stderr,
+                )
+                break
+
+        if not project_path:
+            print(
+                f"⚠️  No project-specific config found for '{project}' - using template defaults only",
+                file=sys.stderr,
+            )
+            print(
+                f"   Searched for: {project_config_name} (case-insensitive)",
+                file=sys.stderr,
+            )
 
     # Load template (required)
     if not template_path.exists():
         raise FileNotFoundError(f"Template configuration not found: {template_path}")
 
+    print(f"📝 Loading template config: {template_path}", file=sys.stderr)
     template_config = load_yaml_config(template_path)
 
     # Load project override (optional)
-    project_config = load_yaml_config(project_path)
+    project_config = {}
+    if project_path:
+        project_config = load_yaml_config(project_path)
+        # Show which settings were overridden
+        if "activity_thresholds" in project_config:
+            current = project_config.get("activity_thresholds", {}).get("current_days")
+            active = project_config.get("activity_thresholds", {}).get("active_days")
+            if current is not None or active is not None:
+                print(
+                    f"✅ Using custom activity thresholds: current={current}, active={active}",
+                    file=sys.stderr,
+                )
 
     # Deep merge
     merged_config = deep_merge_dicts(template_config, project_config)
 
     # Set project name
     merged_config["project"] = project
+
+    # Log final merged activity thresholds for debugging
+    final_current = merged_config.get("activity_thresholds", {}).get("current_days")
+    final_active = merged_config.get("activity_thresholds", {}).get("active_days")
+    print(
+        f"📊 Final merged activity thresholds: current={final_current} days, active={final_active} days",
+        file=sys.stderr,
+    )
 
     return merged_config
 
@@ -5828,6 +5885,33 @@ Examples:
     return parser.parse_args()
 
 
+def write_config_to_step_summary(config: dict[str, Any], project: str) -> None:
+    """Write configuration information to GitHub Step Summary."""
+    step_summary_file = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not step_summary_file:
+        return
+
+    try:
+        current_days = config.get("activity_thresholds", {}).get("current_days", "N/A")
+        active_days = config.get("activity_thresholds", {}).get("active_days", "N/A")
+
+        with open(step_summary_file, "a") as f:
+            f.write(f"\n## 📊 Configuration for {project}\n\n")
+            f.write(f"- **Activity Thresholds:**\n")
+            f.write(f"  - ✅ Current: {current_days} days\n")
+            f.write(f"  - ☑️ Active: {active_days} days\n")
+            f.write(f"  - 🛑 Inactive: {active_days}+ days\n")
+            f.write(
+                f"- **Schema Version:** {config.get('schema_version', 'Unknown')}\n"
+            )
+            f.write(
+                f"- **Config Digest:** `{compute_config_digest(config)[:12]}...`\n\n"
+            )
+    except Exception as e:
+        # Silently fail - step summary is nice-to-have, not critical
+        pass
+
+
 def main() -> int:
     """Main entry point."""
     try:
@@ -5857,6 +5941,9 @@ def main() -> int:
         logger.info(f"Repository Reporting System v{SCRIPT_VERSION}")
         logger.info(f"Project: {args.project}")
         logger.info(f"Configuration digest: {compute_config_digest(config)[:12]}...")
+
+        # Write configuration to GitHub Step Summary
+        write_config_to_step_summary(config, args.project)
 
         # Validate-only mode
         if args.validate_only:
