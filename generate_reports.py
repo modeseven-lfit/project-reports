@@ -3658,6 +3658,7 @@ class ReportRenderer:
                     "gerrit_project": repo.get("gerrit_project", "Unknown"),
                     "workflow_names": workflow_names,
                     "workflows_data": repo.get("features", {}).get("workflows", {}),  # Include workflow data for status
+                    "features": repo.get("features", {}),  # Include full features data for github_mirror check
                     "jenkins_jobs": jenkins_jobs,  # Store full job data for status
                     "jenkins_job_names": jenkins_job_names,
                     "workflow_count": len(workflow_names),
@@ -3697,10 +3698,17 @@ class ReportRenderer:
             # Check if GitHub mirror exists for this repository
             github_mirror_info = repo.get("features", {}).get("github_mirror", {})
 
-            # Only apply red styling if we have explicit github_mirror data AND it shows no mirror
-            # Default to normal styling if no github_mirror data exists (conservative approach)
-            if github_mirror_info and github_mirror_info.get("exists") is False:
-                project_name = f'<span style="color: red; font-weight: bold;">{name}</span>'
+            # Add warning indicator if:
+            # 1. Repository has GitHub workflows (so we'd be generating broken links)
+            # 2. The mirror was explicitly checked on GitHub and not found (reason: "not_found_on_github")
+            # Don't flag repos with "no_github_indicators" - they simply don't use GitHub at all
+            has_workflows = len(repo.get("workflow_names", [])) > 0
+            mirror_not_found = (github_mirror_info.get("exists") is False and
+                              github_mirror_info.get("reason") == "not_found_on_github")
+
+            if has_workflows and mirror_not_found:
+                # Add warning symbol with CSS tooltip, but keep text normal color
+                project_name = f'<span class="mirror-warning">⚠️<span class="tooltip-text">Not mirrored to GitHub</span></span> {name}'
                 has_github_mirror = False
             else:
                 project_name = name
@@ -3836,8 +3844,8 @@ class ReportRenderer:
                             # Fallback to constructed URL from Gerrit project
                             workflow_url = self._construct_github_workflow_actions_url(repo["gerrit_project"], workflow_name)
 
-                    # Only skip links/colors if we have explicit github_mirror data showing no mirror
-                    if github_mirror_info and github_mirror_info.get("exists") is False:
+                    # Only skip links/colors if the repo has workflows but mirror was not found on GitHub
+                    if has_workflows and mirror_not_found:
                         # No GitHub mirror - just add plain text without links or color coding
                         workflow_items.append(workflow_name)
                     elif workflow_url:
@@ -4302,6 +4310,48 @@ class ReportRenderer:
             text-decoration: underline;
             cursor: default;
         }}
+
+        /* Tooltip for non-mirrored repositories */
+        .mirror-warning {{
+            cursor: help;
+            position: relative;
+            display: inline-block;
+        }}
+
+        .mirror-warning .tooltip-text {{
+            visibility: hidden;
+            width: 180px;
+            background-color: #333;
+            color: #fff;
+            text-align: center;
+            border-radius: 6px;
+            padding: 8px;
+            position: absolute;
+            z-index: 1000;
+            bottom: 125%;
+            left: 50%;
+            margin-left: -90px;
+            opacity: 0;
+            transition: opacity 0.3s;
+            font-size: 13px;
+            font-weight: normal;
+            white-space: nowrap;
+        }}
+
+        .mirror-warning .tooltip-text::after {{
+            content: "";
+            position: absolute;
+            top: 100%;
+            left: 50%;
+            margin-left: -5px;
+            border-width: 5px;
+            border-style: solid;
+            border-color: #333 transparent transparent transparent;
+        }}
+
+        .mirror-warning:hover .tooltip-text {{
+            visibility: visible;
+            opacity: 1;
         }}
 
         /* Custom styles for Simple-DataTables integration */
