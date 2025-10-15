@@ -23,6 +23,7 @@ Schema Version: 1.0.0
 """
 
 import argparse
+import atexit
 import concurrent.futures
 import copy
 import datetime
@@ -30,6 +31,7 @@ import hashlib
 import json
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -5491,37 +5493,52 @@ class RepositoryReporter:
         self.feature_registry = FeatureRegistry(config, logger)
         self.aggregator = DataAggregator(config, logger)
         self.renderer = ReportRenderer(config, logger)
+        self.info_master_temp_dir: Optional[str] = None
 
-    def _clone_info_master_repo(self, repos_path: Path) -> None:
-        """Clone the info-master repository for additional context data."""
-        info_master_path = repos_path / "info-master"
+    def _cleanup_info_master_repo(self) -> None:
+        """Clean up the temporary info-master repository directory."""
+        if self.info_master_temp_dir and os.path.exists(self.info_master_temp_dir):
+            try:
+                self.logger.info(
+                    f"Cleaning up info-master repository at {self.info_master_temp_dir}"
+                )
+                shutil.rmtree(self.info_master_temp_dir)
+                self.logger.info("Successfully cleaned up info-master repository")
+            except Exception as e:
+                self.logger.warning(f"Failed to clean up info-master repository: {e}")
+
+    def _clone_info_master_repo(self) -> Optional[Path]:
+        """
+        Clone the info-master repository for additional context data.
+
+        Returns the path to the cloned repository in a temporary directory,
+        or None if cloning failed.
+        """
+        # Create a temporary directory for info-master
+        self.info_master_temp_dir = tempfile.mkdtemp(prefix="info-master-")
+        info_master_path = Path(self.info_master_temp_dir) / "info-master"
         info_master_url = "ssh://modesevenindustrialsolutions@gerrit.linuxfoundation.org:29418/releng/info-master"
 
-        if info_master_path.exists():
-            self.logger.info(
-                f"Info-master repository already exists at {info_master_path}"
-            )
-            # Update existing repository
-            success, output = safe_git_command(
-                ["git", "pull"], info_master_path, self.logger
-            )
-            if success:
-                self.logger.info("Successfully updated info-master repository")
-            else:
-                self.logger.warning(
-                    f"Failed to update info-master repository: {output}"
-                )
+        self.logger.info(
+            f"Cloning info-master repository to temporary location: {info_master_path}"
+        )
+        success, output = safe_git_command(
+            ["git", "clone", info_master_url, str(info_master_path)],
+            Path(self.info_master_temp_dir),
+            self.logger,
+        )
+        if success:
+            self.logger.info("Successfully cloned info-master repository")
+            # Register cleanup handler
+            atexit.register(self._cleanup_info_master_repo)
+            return info_master_path
         else:
-            self.logger.info(f"Cloning info-master repository to {info_master_path}")
-            success, output = safe_git_command(
-                ["git", "clone", info_master_url, str(info_master_path)],
-                repos_path,
-                self.logger,
-            )
-            if success:
-                self.logger.info("Successfully cloned info-master repository")
-            else:
-                self.logger.error(f"Failed to clone info-master repository: {output}")
+            self.logger.error(f"Failed to clone info-master repository: {output}")
+            # Clean up the temp directory if clone failed
+            if os.path.exists(self.info_master_temp_dir):
+                shutil.rmtree(self.info_master_temp_dir)
+            self.info_master_temp_dir = None
+            return None
 
     def analyze_repositories(self, repos_path: Path) -> dict[str, Any]:
         """
@@ -5534,7 +5551,14 @@ class RepositoryReporter:
         self.logger.info(f"Starting repository analysis in {repos_path_abs}")
 
         # Clone info-master repository for additional context
-        self._clone_info_master_repo(repos_path_abs)
+        # This is cloned to a temporary directory to avoid it appearing in the report
+        info_master_path = self._clone_info_master_repo()
+        if info_master_path:
+            self.logger.info(f"Info-master repository available at: {info_master_path}")
+        else:
+            self.logger.warning(
+                "Info-master repository not available - continuing without it"
+            )
 
         # Initialize data structure
         report_data = {
