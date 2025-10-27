@@ -220,7 +220,7 @@ jobs:
       - name: "Upload clone manifest"
         if: always()
         # yamllint disable-line rule:line-length
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: clone-manifest-${{ matrix.project }}
           path: "./${{ matrix.gerrit }}/clone-manifest.json"
@@ -230,7 +230,7 @@ jobs:
       - name: "Upload gerrit clone log"
         if: always()
         # yamllint disable-line rule:line-length
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: gerrit-clone-log-${{ matrix.project }}
           path: "./${{ matrix.gerrit }}.log"
@@ -240,7 +240,7 @@ jobs:
       - name: "Upload analysis reports"
         if: always()
         # yamllint disable-line rule:line-length
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: reports-${{ matrix.project }}
           path: ./reports/${{ matrix.project }}/
