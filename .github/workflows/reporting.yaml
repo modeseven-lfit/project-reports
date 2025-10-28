@@ -115,9 +115,10 @@ jobs:
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
       - name: "Clone Gerrit repositories for ${{ matrix.project }}"
-        # Temporarily use fork until merged upstream
         # yamllint disable-line rule:line-length
-        uses: lfreleng-actions/gerrit-clone-action@ad6769d6f0ae9faac86b3b582c8ef709eae54958 # v0.1.8
+        # uses: lfreleng-actions/gerrit-clone-action@ad6769d6f0ae9faac86b3b582c8ef709eae54958 # v0.1.8
+        # yamllint disable-line rule:line-length
+        uses: modeseven-lfreleng-actions/gerrit-clone-action@add-discovery-input # Temporary
         id: clone
         with:
           host: ${{ matrix.gerrit }}
