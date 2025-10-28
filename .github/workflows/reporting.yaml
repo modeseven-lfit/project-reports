@@ -100,6 +100,9 @@ jobs:
     permissions:
       contents: read
     timeout-minutes: 60
+    concurrency:
+      group: publish-report-${{ matrix.project }}
+      cancel-in-progress: false
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.verify.outputs.matrix) }}
@@ -214,7 +217,7 @@ jobs:
         shell: bash
         env:
           JENKINS_HOST: ${{ matrix.jenkins }}
-          GITHUB_TOKEN: ${{ secrets.GERRIT_REPORTS_PAT_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.CLASSIC_READ_ONLY_PAT_TOKEN }}
           SSH_AVAILABLE: ${{ env.SSH_AVAILABLE }}
         run: |
           project="${{ matrix.project }}"
@@ -312,6 +315,7 @@ jobs:
 
           if [ -z "${REPORTS_TOKEN}" ]; then
             echo "::error::GERRIT_REPORTS_PAT_TOKEN secret not set; cannot publish report."
+            echo "::error::This should be a fine-grained PAT with Contents: Read and write permissions for modeseven-lfit/gerrit-reports"
             exit 1
           fi
 
@@ -408,26 +412,50 @@ jobs:
 
           echo "Direct push mode enabled; pushing to main with rebase/retry logic."
           for attempt in {1..5}; do
+            echo "Attempt ${attempt}/5: Pulling latest changes..."
             set +e
-            git pull --rebase origin main
+            pull_output=$(git pull --rebase origin main 2>&1)
             rc=$?
             set -e
             if [ $rc -ne 0 ]; then
-              echo "Rebase attempt ${attempt} failed; retrying..."
+              echo "::warning::Rebase attempt ${attempt} failed with exit code ${rc}"
+              echo "Rebase output: ${pull_output}"
               sleep $((attempt * 2))
               continue
             fi
 
-            if git push origin HEAD:main; then
-              echo "Report published successfully on attempt ${attempt}."
+            echo "Attempt ${attempt}/5: Pushing changes..."
+            set +e
+            push_output=$(git push origin HEAD:main 2>&1)
+            push_rc=$?
+            set -e
+
+            if [ $push_rc -eq 0 ]; then
+              echo "✅ Report published successfully on attempt ${attempt}."
               exit 0
             else
-              echo "Push attempt ${attempt} failed; retrying..."
+              echo "::warning::Push attempt ${attempt} failed with exit code ${push_rc}"
+              echo "Push output: ${push_output}"
+
+              # Check if it's an authentication issue
+              if echo "${push_output}" | grep -qi "authentication\|permission\|403\|401"; then
+                echo "::error::Authentication/permission error detected."
+                echo "::error::GERRIT_REPORTS_PAT_TOKEN must be a fine-grained PAT with:"
+                echo "::error::  - Repository access: modeseven-lfit/gerrit-reports"
+                echo "::error::  - Permissions: Contents (Read and write)"
+                exit 1
+              fi
+
               sleep $((attempt * 2))
             fi
           done
 
-          echo "::error::Failed to push report after multiple attempts."
+          echo "::error::Failed to push report after 5 attempts."
+          echo "::error::This may be due to:"
+          echo "::error::1. Multiple jobs pushing simultaneously (despite concurrency controls)"
+          echo "::error::2. PAT token lacking required permissions (needs Contents: Read and write for modeseven-lfit/gerrit-reports)"
+          echo "::error::3. Branch protection rules blocking direct pushes"
+          echo "::error::Consider setting REPORTS_PR_MODE variable to 'true' to use PR-based publishing instead."
           exit 1
         # yamllint enable rule:line-length
 

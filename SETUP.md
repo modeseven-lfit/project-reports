@@ -21,10 +21,15 @@ The reporting workflow (`reporting.yaml`) provides:
 
 ## Configuration
 
-### GitHub Secret: GERRIT_REPORTS_PAT_TOKEN
+### GitHub Secrets: Required Tokens
 
-The workflow requires a GitHub Personal Access Token (PAT) to query workflow
-status across all organizations.
+The workflow requires **TWO separate GitHub Personal Access Tokens** for
+different purposes:
+
+#### 1. CLASSIC_READ_ONLY_PAT_TOKEN (Classic PAT)
+
+**Purpose**: Query workflow status and GitHub API data across all
+organizations.
 
 **⚠️ IMPORTANT**: You **MUST use a Classic Personal Access Token**, not a
 fine-grained token, because fine-grained tokens work with a single
@@ -33,23 +38,51 @@ needed for cross-org reporting.
 
 **Required Scopes**:
 
-- `repo` (or at least `repo:status`)
-- `actions:read`
+- `repo:status` (access to repository commit statuses)
+- `actions:read` (access to workflow runs)
 
-For detailed instructions on creating and configuring the token, see:
-**[GitHub Token Requirements Documentation](./GITHUB_TOKEN_REQUIREMENTS.md)**
-
-#### Quick Setup
+**Quick Setup**:
 
 1. Go to <https://github.com/settings/tokens>
 2. Click "Generate new token" → "Generate new token (classic)"
-3. Select scopes: `repo` and `actions:read`
+3. Select scopes: `repo:status` and `actions:read`
 4. Generate and copy the token
 5. Go to your repository's **Settings** → **Secrets and variables** → **Actions**
 6. Click "New repository secret"
-7. Name: `GERRIT_REPORTS_PAT_TOKEN`
+7. Name: `CLASSIC_READ_ONLY_PAT_TOKEN`
 8. Value: Paste your token
 9. Click "Add secret"
+
+#### 2. GERRIT_REPORTS_PAT_TOKEN (Fine-grained PAT)
+
+**Purpose**: Push generated reports to the `modeseven-lfit/gerrit-reports` repository.
+
+**⚠️ IMPORTANT**: This should be a **Fine-grained Personal Access Token** with
+write access specifically scoped to the gerrit-reports repository.
+
+**Required Permissions**:
+
+- **Repository access**: `modeseven-lfit/gerrit-reports`
+- **Permissions**: Contents (Read and write)
+
+**Quick Setup**:
+
+1. Go to <https://github.com/settings/tokens?type=beta>
+2. Click "Generate new token"
+3. Token name: `Gerrit Reports Publishing`
+4. Set token duration (recommend 90 days or 1 year)
+5. Repository access: "Select repositories" → Choose
+   `modeseven-lfit/gerrit-reports`
+6. Permissions → Repository permissions → Contents: "Read and write"
+7. Generate token and copy it
+8. Go to your repository's **Settings** → **Secrets and variables** → **Actions**
+9. Click "New repository secret"
+10. Name: `GERRIT_REPORTS_PAT_TOKEN`
+11. Value: Paste your token
+12. Click "Add secret"
+
+For detailed instructions on creating and configuring tokens, see:
+**[GitHub Token Requirements Documentation](./GITHUB_TOKEN_REQUIREMENTS.md)**
 
 ### GitHub Variable: PROJECTS_JSON
 
@@ -189,8 +222,10 @@ schedule:
 2. **Invalid JSON**: Check JSON syntax using online tools
 3. **Gerrit connectivity**: Check that Gerrit servers are accessible
 4. **Permission errors**: Verify repository permissions and secrets
-5. **Grey workflow status in reports**: Check `GERRIT_REPORTS_PAT_TOKEN` exists
+5. **Grey workflow status in reports**: Check `CLASSIC_READ_ONLY_PAT_TOKEN` exists
    and is a Classic PAT with required scopes (see [GitHub Token Requirements](./GITHUB_TOKEN_REQUIREMENTS.md))
+6. **Report publishing failures**: Check `GERRIT_REPORTS_PAT_TOKEN` exists and has
+   Contents: Read and write permissions for `modeseven-lfit/gerrit-reports`
 
 ### Debugging
 

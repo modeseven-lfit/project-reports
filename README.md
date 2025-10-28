@@ -120,13 +120,9 @@ pip install -r requirements.txt
 ### Setup & Configuration
 
 - [**Setup Guide**](SETUP.md) - Complete workflow setup and
-  configuration
+  configuration (includes setup for **two required tokens**)
 - [**GitHub Token Requirements**](GITHUB_TOKEN_REQUIREMENTS.md) -
-  **Required reading** for Classic PAT setup
-  **Required reading** for Classic PAT setup
-- [**GitHub Token
-  Requirements**](GITHUB_TOKEN_REQUIREMENTS.md)
-  - **Required reading** for Classic PAT setup
+  Detailed guide for configuring Classic and Fine-grained PATs
 
 ### Troubleshooting & Debugging
 
