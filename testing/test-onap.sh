@@ -43,6 +43,47 @@ log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+# Check if required environment variables are set
+check_tokens() {
+    log_info "Checking required GitHub tokens..."
+
+    local missing_tokens=false
+
+    if [[ -z "${CLASSIC_READ_ONLY_PAT_TOKEN:-}" ]]; then
+        log_error "CLASSIC_READ_ONLY_PAT_TOKEN environment variable is not set"
+        log_error "This token is required for GitHub API queries (workflow status, repo metadata)"
+        missing_tokens=true
+    else
+        log_success "CLASSIC_READ_ONLY_PAT_TOKEN is set"
+    fi
+
+    if [[ -z "${GERRIT_REPORTS_PAT_TOKEN:-}" ]]; then
+        log_error "GERRIT_REPORTS_PAT_TOKEN environment variable is not set"
+        log_error "This token is required for publishing reports to gerrit-reports repository"
+        missing_tokens=true
+    else
+        log_success "GERRIT_REPORTS_PAT_TOKEN is set"
+    fi
+
+    if [[ "$missing_tokens" == true ]]; then
+        echo
+        log_error "Missing required GitHub tokens!"
+        echo
+        echo "Please set the following environment variables before running this script:"
+        echo
+        echo "  export CLASSIC_READ_ONLY_PAT_TOKEN='your-classic-pat-token'"
+        echo "  export GERRIT_REPORTS_PAT_TOKEN='your-fine-grained-pat-token'"
+        echo
+        echo "For more information, see:"
+        echo "  - SETUP.md"
+        echo "  - TWO_TOKEN_SETUP.md"
+        echo
+        exit 1
+    fi
+
+    log_success "All required tokens are set"
+}
+
 # Check if Python 3 is available
 check_python() {
     if ! command -v python3 &> /dev/null; then
@@ -192,11 +233,17 @@ show_help() {
     echo "  -v, --validate Only validate configuration and exit"
     echo "  --no-deps      Skip dependency installation"
     echo
-    echo "Environment Variables:"
+    echo "Required Environment Variables:"
+    echo "  CLASSIC_READ_ONLY_PAT_TOKEN    Classic PAT for GitHub API queries"
+    echo "  GERRIT_REPORTS_PAT_TOKEN       Fine-grained PAT for report publishing"
+    echo
+    echo "Optional Environment Variables:"
     echo "  REPOS_PATH     Override default repository path"
     echo "  OUTPUT_DIR     Override default output directory"
     echo
     echo "Examples:"
+    echo "  export CLASSIC_READ_ONLY_PAT_TOKEN='ghp_xxx...'"
+    echo "  export GERRIT_REPORTS_PAT_TOKEN='github_pat_xxx...'"
     echo "  $0                    # Generate report with default settings"
     echo "  $0 --clean           # Clean output directory only"
     echo "  $0 --validate        # Validate configuration only"
@@ -249,7 +296,10 @@ main() {
     log_info "================================="
     echo
 
-    # Always check Python and files
+    # Always check tokens first
+    check_tokens
+
+    # Then check Python and files
     check_python
     check_files
 

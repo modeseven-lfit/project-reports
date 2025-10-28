@@ -217,7 +217,8 @@ jobs:
         shell: bash
         env:
           JENKINS_HOST: ${{ matrix.jenkins }}
-          GITHUB_TOKEN: ${{ secrets.CLASSIC_READ_ONLY_PAT_TOKEN }}
+          # yamllint disable-line rule:line-length
+          CLASSIC_READ_ONLY_PAT_TOKEN: ${{ secrets.CLASSIC_READ_ONLY_PAT_TOKEN }}
           SSH_AVAILABLE: ${{ env.SSH_AVAILABLE }}
         run: |
           project="${{ matrix.project }}"
@@ -231,10 +232,12 @@ jobs:
           fi
 
           # Debug: Show GitHub token availability
-          if [ -n "$GITHUB_TOKEN" ]; then
+          if [ -n "$CLASSIC_READ_ONLY_PAT_TOKEN" ]; then
             echo "🔧 GitHub API integration enabled"
+           echo  "(CLASSIC_READ_ONLY_PAT_TOKEN)"
           else
-            echo "ℹ️ No GitHub token provided - GitHub API integration disabled"
+            echo "ℹ️ No CLASSIC_READ_ONLY_PAT_TOKEN provided"
+            echo "❌ GitHub API integration disabled"
           fi
 
           # Execute the comprehensive reporting system

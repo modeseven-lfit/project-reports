@@ -1144,7 +1144,7 @@ class GitHubAPIClient:
                     f"❌ **GitHub API Authentication Failed** for `{owner}/{repo}`\n\n"
                 )
                 error_msg += "The GitHub token is invalid or has expired.\n\n"
-                error_msg += "**Action Required:** Update the `GITHUB_TOKEN` secret with a valid Personal Access Token.\n"
+                error_msg += "**Action Required:** Update the `CLASSIC_READ_ONLY_PAT_TOKEN` secret with a valid Classic Personal Access Token.\n"
                 self.logger.error(
                     f"❌ Error: GitHub API query returned error code: 401 for {owner}/{repo}"
                 )
@@ -3050,15 +3050,26 @@ class FeatureRegistry:
         )
         github_token = self.config.get("extensions", {}).get("github_api", {}).get(
             "token"
-        ) or os.environ.get("GITHUB_TOKEN")
+        ) or os.environ.get("CLASSIC_READ_ONLY_PAT_TOKEN")
+
+        is_github_repo = self._is_github_repository(repo_path)
+
+        self.logger.debug(
+            f"GitHub API integration check for {repo_path.name}: "
+            f"enabled={github_api_enabled}, has_token={bool(github_token)}, "
+            f"is_github_repo={is_github_repo}"
+        )
 
         if (
             github_api_enabled
             and github_token
-            and self._is_github_repository(repo_path)
+            and is_github_repo
         ):
             try:
                 owner, repo_name = self._extract_github_repo_info(repo_path)
+                self.logger.info(
+                    f"Attempting GitHub API query for {owner}/{repo_name}"
+                )
                 if owner and repo_name:
                     github_client = GitHubAPIClient(github_token)
                     github_status = (
@@ -3260,7 +3271,7 @@ class FeatureRegistry:
             # Try to access GitHub API to verify repository exists
             github_token = self.config.get("extensions", {}).get("github_api", {}).get(
                 "token"
-            ) or os.environ.get("GITHUB_TOKEN")
+            ) or os.environ.get("CLASSIC_READ_ONLY_PAT_TOKEN")
 
             if github_token:
                 try:
