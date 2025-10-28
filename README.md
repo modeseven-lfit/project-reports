@@ -37,8 +37,7 @@ python3 generate_reports.py \
   --config-dir "./configuration" \
   --output-dir "./reports" \
   --verbose
-```
-
+```text
 ### GitHub Actions Integration
 
 ```yaml
@@ -51,8 +50,7 @@ steps:
         --config-dir "./configuration" \
         --output-dir "./reports" \
         --verbose
-```
-
+```text
 ## ⚙️ Configuration
 
 Project-specific configurations in `configuration/` directory:
@@ -72,8 +70,7 @@ gerrit:
 html_tables:
   sortable: true
   searchable: true
-```
-
+```text
 ## 📁 Output Structure
 
 ```text
@@ -84,8 +81,7 @@ reports/
     ├── report.html               # Interactive HTML
     ├── config_resolved.json      # Applied configuration
     └── <PROJECT>_report_bundle.zip
-```
-
+```text
 ## 📊 Activity Status System
 
 The reporting system uses a unified three-tier activity classification:
@@ -103,8 +99,7 @@ activity_thresholds:
   current_days: 365      # ✅ Current threshold
   active_days: 1095      # ☑️ Active threshold (365-1095 range)
   # Anything > 1095 days = 🛑 Inactive
-```
-
+```text
 This unified system replaces the previous separate "activity status" and
 "age categories" with a single, clear classification that appears consistently
 across all reports and tables.
@@ -119,9 +114,28 @@ Install with:
 
 ```bash
 pip install -r requirements.txt
-```
-
+```text
 ## 📚 Documentation
+
+### Setup & Configuration
+
+- [**Setup Guide**](SETUP.md) - Complete workflow setup and
+  configuration
+- [**GitHub Token Requirements**](GITHUB_TOKEN_REQUIREMENTS.md) -
+  **Required reading** for Classic PAT setup
+  **Required reading** for Classic PAT setup
+- [**GitHub Token
+  Requirements**](GITHUB_TOKEN_REQUIREMENTS.md)
+  - **Required reading** for Classic PAT setup
+
+### Troubleshooting & Debugging
+
+- [**API Statistics**](API_STATISTICS.md) - Understanding external
+  API call tracking and error reporting
+- [**GitHub API Error Logging**](GITHUB_API_ERROR_LOGGING.md) -
+  Debugging API authentication and permission issues
+
+### Legacy Guides
 
 - [**Workflow Integration Guide**](WORKFLOW_INTEGRATION.md) - CI/CD setup and
   configuration

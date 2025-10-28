@@ -21,6 +21,36 @@ The reporting workflow (`reporting.yaml`) provides:
 
 ## Configuration
 
+### GitHub Secret: GERRIT_REPORTS_PAT_TOKEN
+
+The workflow requires a GitHub Personal Access Token (PAT) to query workflow
+status across all organizations.
+
+**⚠️ IMPORTANT**: You **MUST use a Classic Personal Access Token**, not a
+fine-grained token, because fine-grained tokens work with a single
+organization and cannot span the Linux Foundation organizations
+needed for cross-org reporting.
+
+**Required Scopes**:
+
+- `repo` (or at least `repo:status`)
+- `actions:read`
+
+For detailed instructions on creating and configuring the token, see:
+**[GitHub Token Requirements Documentation](./GITHUB_TOKEN_REQUIREMENTS.md)**
+
+#### Quick Setup
+
+1. Go to <https://github.com/settings/tokens>
+2. Click "Generate new token" → "Generate new token (classic)"
+3. Select scopes: `repo` and `actions:read`
+4. Generate and copy the token
+5. Go to your repository's **Settings** → **Secrets and variables** → **Actions**
+6. Click "New repository secret"
+7. Name: `GERRIT_REPORTS_PAT_TOKEN`
+8. Value: Paste your token
+9. Click "Add secret"
+
 ### GitHub Variable: PROJECTS_JSON
 
 The workflow requires a GitHub repository variable called `PROJECTS_JSON` that
@@ -32,8 +62,7 @@ contains an array of project configurations:
   { "project": "ONAP", "server": "gerrit.onap.org" },
   { "project": "Opendaylight", "server": "git.opendaylight.org" }
 ]
-```
-
+```text
 #### Setting up the Variable
 
 1. Go to your repository's **Settings** → **Secrets and variables** →
@@ -151,8 +180,7 @@ Change the `cron` expression in the workflow file:
 schedule:
   # Run every Monday at 7:00 AM UTC
   - cron: '0 7 * * 1'
-```
-
+```text
 ## Troubleshooting
 
 ### Common Issues
@@ -161,6 +189,8 @@ schedule:
 2. **Invalid JSON**: Check JSON syntax using online tools
 3. **Gerrit connectivity**: Check that Gerrit servers are accessible
 4. **Permission errors**: Verify repository permissions and secrets
+5. **Grey workflow status in reports**: Check `GERRIT_REPORTS_PAT_TOKEN` exists
+   and is a Classic PAT with required scopes (see [GitHub Token Requirements](./GITHUB_TOKEN_REQUIREMENTS.md))
 
 ### Debugging
 
@@ -168,6 +198,8 @@ schedule:
 2. Review the GitHub Step Summary for detailed information
 3. Download and examine the generated artifacts
 4. Test the Python script locally with sample data
+5. For GitHub API issues, see [GitHub API Error Logging](./GITHUB_API_ERROR_LOGGING.md)
+6. For token configuration issues, see [GitHub Token Requirements](./GITHUB_TOKEN_REQUIREMENTS.md)
 
 ## Future Enhancements
 

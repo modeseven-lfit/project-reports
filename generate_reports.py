@@ -87,6 +87,175 @@ DEFAULT_TIME_WINDOWS = {
 }
 
 # =============================================================================
+# API STATISTICS TRACKING
+# =============================================================================
+
+
+class APIStatistics:
+    """Track statistics for external API calls (GitHub, Gerrit, Jenkins)."""
+
+    def __init__(self):
+        """Initialize statistics tracker."""
+        self.stats = {
+            "github": {"success": 0, "errors": {}},
+            "gerrit": {"success": 0, "errors": {}},
+            "jenkins": {"success": 0, "errors": {}},
+            "info_master": {"success": False, "error": None},
+        }
+
+    def record_success(self, api_type: str) -> None:
+        """Record a successful API call."""
+        if api_type in self.stats:
+            self.stats[api_type]["success"] += 1
+
+    def record_error(self, api_type: str, status_code: int) -> None:
+        """Record an API error by status code."""
+        if api_type in self.stats:
+            errors = self.stats[api_type]["errors"]
+            errors[status_code] = errors.get(status_code, 0) + 1
+
+    def record_exception(self, api_type: str, error_type: str = "exception") -> None:
+        """Record an API exception (non-HTTP error)."""
+        if api_type in self.stats:
+            errors = self.stats[api_type]["errors"]
+            errors[error_type] = errors.get(error_type, 0) + 1
+
+    def record_info_master(self, success: bool, error: Optional[str] = None) -> None:
+        """Record info-master clone status."""
+        self.stats["info_master"]["success"] = success
+        if error:
+            self.stats["info_master"]["error"] = error
+
+    def get_total_calls(self, api_type: str) -> int:
+        """Get total number of API calls (success + errors)."""
+        if api_type not in self.stats:
+            return 0
+        success = self.stats[api_type]["success"]
+        errors = sum(self.stats[api_type]["errors"].values())
+        return success + errors
+
+    def get_total_errors(self, api_type: str) -> int:
+        """Get total number of errors for an API."""
+        if api_type not in self.stats:
+            return 0
+        return sum(self.stats[api_type]["errors"].values())
+
+    def has_errors(self) -> bool:
+        """Check if any API has errors."""
+        for api_type in ["github", "gerrit", "jenkins"]:
+            if self.get_total_errors(api_type) > 0:
+                return True
+        if not self.stats["info_master"]["success"] and self.stats["info_master"]["error"]:
+            return True
+        return False
+
+    def format_console_output(self) -> str:
+        """Format statistics for console output."""
+        lines = []
+
+        # GitHub API stats
+        if self.get_total_calls("github") > 0:
+            lines.append("\n📊 GitHub API Statistics:")
+            lines.append(f"   ✅ Successful calls: {self.stats['github']['success']}")
+            total_errors = self.get_total_errors("github")
+            if total_errors > 0:
+                lines.append(f"   ❌ Failed calls: {total_errors}")
+                for code, count in sorted(self.stats["github"]["errors"].items(), key=lambda x: str(x[0])):
+                    lines.append(f"      • Error {code}: {count}")
+
+        # Gerrit API stats
+        if self.get_total_calls("gerrit") > 0:
+            lines.append("\n📊 Gerrit API Statistics:")
+            lines.append(f"   ✅ Successful calls: {self.stats['gerrit']['success']}")
+            total_errors = self.get_total_errors("gerrit")
+            if total_errors > 0:
+                lines.append(f"   ❌ Failed calls: {total_errors}")
+                for code, count in sorted(self.stats["gerrit"]["errors"].items(), key=lambda x: str(x[0])):
+                    lines.append(f"      • Error {code}: {count}")
+
+        # Jenkins API stats
+        if self.get_total_calls("jenkins") > 0:
+            lines.append("\n📊 Jenkins API Statistics:")
+            lines.append(f"   ✅ Successful calls: {self.stats['jenkins']['success']}")
+            total_errors = self.get_total_errors("jenkins")
+            if total_errors > 0:
+                lines.append(f"   ❌ Failed calls: {total_errors}")
+                for code, count in sorted(self.stats["jenkins"]["errors"].items(), key=lambda x: str(x[0])):
+                    lines.append(f"      • Error {code}: {count}")
+
+        # Info-master clone status
+        if self.stats["info_master"]["success"]:
+            lines.append("\n📊 Info-Master Clone:")
+            lines.append("   ✅ Successfully cloned")
+        elif self.stats["info_master"]["error"]:
+            lines.append("\n📊 Info-Master Clone:")
+            lines.append(f"   ❌ Failed: {self.stats['info_master']['error']}")
+
+        return "\n".join(lines) if lines else ""
+
+    def write_to_step_summary(self) -> None:
+        """Write statistics to GitHub Step Summary."""
+        step_summary_file = os.environ.get("GITHUB_STEP_SUMMARY")
+        if not step_summary_file:
+            return
+
+        try:
+            with open(step_summary_file, "a") as f:
+                f.write("\n## 📊 External API Statistics\n\n")
+
+                # GitHub API
+                if self.get_total_calls("github") > 0:
+                    f.write("### GitHub API\n\n")
+                    f.write(f"- ✅ Successful calls: {self.stats['github']['success']}\n")
+                    total_errors = self.get_total_errors("github")
+                    if total_errors > 0:
+                        f.write(f"- ❌ Failed calls: {total_errors}\n")
+                        f.write("\n**Error Breakdown:**\n\n")
+                        for code, count in sorted(self.stats["github"]["errors"].items(), key=lambda x: str(x[0])):
+                            f.write(f"- `{code}`: {count} call(s)\n")
+                    f.write("\n")
+
+                # Gerrit API
+                if self.get_total_calls("gerrit") > 0:
+                    f.write("### Gerrit API\n\n")
+                    f.write(f"- ✅ Successful calls: {self.stats['gerrit']['success']}\n")
+                    total_errors = self.get_total_errors("gerrit")
+                    if total_errors > 0:
+                        f.write(f"- ❌ Failed calls: {total_errors}\n")
+                        f.write("\n**Error Breakdown:**\n\n")
+                        for code, count in sorted(self.stats["gerrit"]["errors"].items(), key=lambda x: str(x[0])):
+                            f.write(f"- `{code}`: {count} call(s)\n")
+                    f.write("\n")
+
+                # Jenkins API
+                if self.get_total_calls("jenkins") > 0:
+                    f.write("### Jenkins API\n\n")
+                    f.write(f"- ✅ Successful calls: {self.stats['jenkins']['success']}\n")
+                    total_errors = self.get_total_errors("jenkins")
+                    if total_errors > 0:
+                        f.write(f"- ❌ Failed calls: {total_errors}\n")
+                        f.write("\n**Error Breakdown:**\n\n")
+                        for code, count in sorted(self.stats["jenkins"]["errors"].items(), key=lambda x: str(x[0])):
+                            f.write(f"- `{code}`: {count} call(s)\n")
+                    f.write("\n")
+
+                # Info-master
+                if self.stats["info_master"]["success"]:
+                    f.write("### Info-Master Repository\n\n")
+                    f.write("- ✅ Successfully cloned from gerrit.linuxfoundation.org\n\n")
+                elif self.stats["info_master"]["error"]:
+                    f.write("### Info-Master Repository\n\n")
+                    f.write(f"- ❌ Clone failed: {self.stats['info_master']['error']}\n\n")
+
+        except Exception as e:
+            logging.debug(f"Could not write API statistics to GITHUB_STEP_SUMMARY: {e}")
+
+
+# Global statistics tracker
+api_stats = APIStatistics()
+
+
+# =============================================================================
 # LOGGING SETUP
 # =============================================================================
 
@@ -394,11 +563,12 @@ class GerritAPIClient:
     """Client for interacting with Gerrit REST API."""
 
     def __init__(
-        self, host: str, base_url: Optional[str] = None, timeout: float = 30.0
+        self, host: str, base_url: Optional[str] = None, timeout: float = 30.0, stats: Optional[APIStatistics] = None
     ):
         """Initialize Gerrit API client."""
         self.host = host
         self.timeout = timeout
+        self.stats = stats or api_stats
 
         if base_url:
             self.base_url = base_url
@@ -440,19 +610,23 @@ class GerritAPIClient:
             response = self.client.get(url)
 
             if response.status_code == 200:
+                self.stats.record_success("gerrit")
                 result = self._parse_json_response(response.text)
                 return result
             elif response.status_code == 404:
+                self.stats.record_error("gerrit", 404)
                 logging.debug(f"Project not found in Gerrit: {project_name}")
                 return None
             else:
+                self.stats.record_error("gerrit", response.status_code)
                 logging.warning(
-                    f"Gerrit API returned {response.status_code} for project {project_name}"
+                    f"❌ Error: Gerrit API query returned error code: {response.status_code} for project {project_name}"
                 )
                 return None
 
         except Exception as e:
-            logging.error(f"Exception fetching project info for {project_name}: {e}")
+            self.stats.record_exception("gerrit")
+            logging.error(f"❌ Error: Gerrit API query exception for {project_name}: {e}")
             return None
 
     def _parse_json_response(self, response_text: str) -> dict[str, Any]:
@@ -476,24 +650,27 @@ class GerritAPIClient:
             response = self.client.get("/projects/?d")
 
             if response.status_code == 200:
+                self.stats.record_success("gerrit")
                 result = self._parse_json_response(response.text)
                 logging.info(f"Fetched {len(result)} projects from Gerrit")
                 return result if isinstance(result, dict) else {}
             else:
+                self.stats.record_error("gerrit", response.status_code)
                 logging.error(
-                    f"Failed to fetch projects list: HTTP {response.status_code}"
+                    f"❌ Error: Gerrit API query returned error code: {response.status_code}"
                 )
                 return {}
 
         except Exception as e:
-            logging.error(f"Exception while fetching all projects: {e}")
+            self.stats.record_exception("gerrit")
+            logging.error(f"❌ Error: Gerrit API query exception: {e}")
             return {}
 
 
 class JenkinsAPIClient:
     """Client for interacting with Jenkins REST API."""
 
-    def __init__(self, host: str, timeout: float = 30.0):
+    def __init__(self, host: str, timeout: float = 30.0, stats: Optional[APIStatistics] = None):
         """Initialize Jenkins API client."""
         self.host = host
         self.timeout = timeout
@@ -501,6 +678,7 @@ class JenkinsAPIClient:
         self.api_base_path = None  # Will be discovered
         self._jobs_cache: dict[str, Any] = {}  # Cache for all jobs data
         self._cache_populated = False
+        self.stats = stats or api_stats
 
         import httpx
 
@@ -540,6 +718,7 @@ class JenkinsAPIClient:
 
                 response = self.client.get(test_url)
                 if response.status_code == 200:
+                    self.stats.record_success("jenkins")
                     try:
                         data = response.json()
                         if "jobs" in data and isinstance(data["jobs"], list):
@@ -585,6 +764,7 @@ class JenkinsAPIClient:
 
             logging.info(f"Jenkins API response: {response.status_code}")
             if response.status_code == 200:
+                self.stats.record_success("jenkins")
                 data = response.json()
                 job_count = len(data.get("jobs", []))
                 logging.info(f"Found {job_count} Jenkins jobs (cached for reuse)")
@@ -594,14 +774,16 @@ class JenkinsAPIClient:
                 self._cache_populated = True
                 return data
             else:
+                self.stats.record_error("jenkins", response.status_code)
                 logging.warning(
-                    f"Jenkins API returned {response.status_code} for {url}"
+                    f"❌ Error: Jenkins API query returned error code: {response.status_code} for {url}"
                 )
                 logging.warning(f"Response text: {response.text[:500]}")
                 return {}
 
         except Exception as e:
-            logging.error(f"Exception fetching Jenkins jobs from {self.host}: {e}")
+            self.stats.record_exception("jenkins")
+            logging.error(f"❌ Error: Jenkins API query exception for {self.host}: {e}")
             return {}
 
     def get_jobs_for_project(
@@ -923,7 +1105,7 @@ class JenkinsAPIClient:
 class GitHubAPIClient:
     """Client for interacting with GitHub API to fetch workflow run status."""
 
-    def __init__(self, token: str, timeout: float = 30.0):
+    def __init__(self, token: str, timeout: float = 30.0, stats: Optional[APIStatistics] = None):
         """Initialize GitHub API client with token."""
         self.token = token
         self.base_url = "https://api.github.com"
@@ -938,6 +1120,7 @@ class GitHubAPIClient:
             },
         )
         self.logger = logging.getLogger(__name__)
+        self.stats = stats or api_stats
 
     def _write_to_step_summary(self, message: str) -> None:
         """Write a message to GitHub Step Summary if running in GitHub Actions."""
@@ -956,17 +1139,19 @@ class GitHubAPIClient:
             response = self.client.get(url)
 
             if response.status_code == 401:
+                self.stats.record_error("github", 401)
                 error_msg = (
                     f"❌ **GitHub API Authentication Failed** for `{owner}/{repo}`\n\n"
                 )
                 error_msg += "The GitHub token is invalid or has expired.\n\n"
                 error_msg += "**Action Required:** Update the `GITHUB_TOKEN` secret with a valid Personal Access Token.\n"
                 self.logger.error(
-                    f"GitHub API authentication failed (401) for {owner}/{repo}: {response.text}"
+                    f"❌ Error: GitHub API query returned error code: 401 for {owner}/{repo}"
                 )
                 self._write_to_step_summary(error_msg)
                 return []
             elif response.status_code == 403:
+                self.stats.record_error("github", 403)
                 error_msg = (
                     f"⚠️ **GitHub API Permission Denied** for `{owner}/{repo}`\n\n"
                 )
@@ -986,11 +1171,12 @@ class GitHubAPIClient:
                     "**To Fix:** Update your Personal Access Token with these scopes.\n"
                 )
                 self.logger.error(
-                    f"GitHub API permission denied (403) for {owner}/{repo}: {response.text}"
+                    f"❌ Error: GitHub API query returned error code: 403 for {owner}/{repo}"
                 )
                 self._write_to_step_summary(error_msg)
                 return []
             elif response.status_code == 200:
+                self.stats.record_success("github")
                 data = response.json()
                 workflows = []
 
@@ -1025,16 +1211,19 @@ class GitHubAPIClient:
                 return workflows
 
             elif response.status_code == 404:
+                self.stats.record_error("github", 404)
                 self.logger.debug(f"Repository {owner}/{repo} not found or no access")
                 return []
             else:
+                self.stats.record_error("github", response.status_code)
                 self.logger.warning(
-                    f"GitHub API returned {response.status_code} for workflows in {owner}/{repo}: {response.text}"
+                    f"❌ Error: GitHub API query returned error code: {response.status_code} for {owner}/{repo}"
                 )
                 return []
 
         except Exception as e:
-            self.logger.error(f"Error fetching workflows for {owner}/{repo}: {e}")
+            self.stats.record_exception("github")
+            self.logger.error(f"❌ Error: GitHub API query exception for {owner}/{repo}: {e}")
             return []
 
     def get_workflow_runs_status(
@@ -1048,16 +1237,19 @@ class GitHubAPIClient:
             response = self.client.get(url, params=params)
 
             if response.status_code == 401:
+                self.stats.record_error("github", 401)
                 self.logger.error(
-                    f"GitHub API authentication failed (401) for workflow {workflow_id} in {owner}/{repo}"
+                    f"❌ Error: GitHub API query returned error code: 401 for workflow {workflow_id} in {owner}/{repo}"
                 )
                 return {"status": "auth_error", "last_run": None}
             elif response.status_code == 403:
+                self.stats.record_error("github", 403)
                 self.logger.error(
-                    f"GitHub API permission denied (403) for workflow {workflow_id} in {owner}/{repo}: {response.text}"
+                    f"❌ Error: GitHub API query returned error code: 403 for workflow {workflow_id} in {owner}/{repo}"
                 )
                 return {"status": "permission_error", "last_run": None}
             elif response.status_code == 200:
+                self.stats.record_success("github")
                 data = response.json()
                 runs = data.get("workflow_runs", [])
 
@@ -1091,12 +1283,14 @@ class GitHubAPIClient:
                     },
                 }
             else:
+                self.stats.record_error("github", response.status_code)
                 self.logger.warning(
-                    f"GitHub API returned {response.status_code} for workflow {workflow_id} runs: {response.text}"
+                    f"❌ Error: GitHub API query returned error code: {response.status_code} for workflow {workflow_id} runs"
                 )
                 return {"status": "api_error", "last_run": None}
 
         except Exception as e:
+            self.stats.record_exception("github")
             self.logger.error(
                 f"Error fetching workflow runs for {owner}/{repo}/workflows/{workflow_id}: {e}"
             )
@@ -5527,13 +5721,17 @@ class RepositoryReporter:
             Path(self.info_master_temp_dir),
             self.logger,
         )
+
         if success:
-            self.logger.info("Successfully cloned info-master repository")
+            api_stats.record_info_master(True)
+            self.logger.info("✅ Successfully cloned info-master repository")
             # Register cleanup handler
             atexit.register(self._cleanup_info_master_repo)
             return info_master_path
         else:
-            self.logger.error(f"Failed to clone info-master repository: {output}")
+            error_msg = f"Clone failed: {output[:200]}" if output else "Clone failed"
+            api_stats.record_info_master(False, error_msg)
+            self.logger.error(f"❌ Failed to clone info-master repository: {output}")
             # Clean up the temp directory if clone failed
             if os.path.exists(self.info_master_temp_dir):
                 shutil.rmtree(self.info_master_temp_dir)
@@ -6027,6 +6225,14 @@ def main() -> int:
 
         if error_count > 0:
             print(f"   - Check {json_path} for error details")
+
+        # Print API statistics
+        api_stats_output = api_stats.format_console_output()
+        if api_stats_output:
+            print(api_stats_output)
+
+        # Write API statistics to GitHub Step Summary
+        api_stats.write_to_step_summary()
 
         return 0
 
