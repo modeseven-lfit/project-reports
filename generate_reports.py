@@ -5513,20 +5513,49 @@ class RepositoryReporter:
 
         Returns the path to the cloned repository in a temporary directory,
         or None if cloning failed.
+
+        Attempts SSH clone first if SSH_AVAILABLE environment variable is set to 'true',
+        otherwise falls back to HTTPS.
         """
         # Create a temporary directory for info-master
         self.info_master_temp_dir = tempfile.mkdtemp(prefix="info-master-")
         info_master_path = Path(self.info_master_temp_dir) / "info-master"
-        info_master_url = "ssh://modesevenindustrialsolutions@gerrit.linuxfoundation.org:29418/releng/info-master"
 
-        self.logger.info(
-            f"Cloning info-master repository to temporary location: {info_master_path}"
-        )
-        success, output = safe_git_command(
-            ["git", "clone", info_master_url, str(info_master_path)],
-            Path(self.info_master_temp_dir),
-            self.logger,
-        )
+        # Check if SSH is available from environment
+        ssh_available = os.environ.get("SSH_AVAILABLE", "false").lower() == "true"
+
+        ssh_url = "ssh://modesevenindustrialsolutions@gerrit.linuxfoundation.org:29418/releng/info-master"
+        https_url = "https://gerrit.linuxfoundation.org/infra/releng/info-master"
+
+        success = False
+        output = ""
+
+        # Try SSH first if available
+        if ssh_available:
+            self.logger.info(
+                f"Attempting SSH clone of info-master repository to: {info_master_path}"
+            )
+            success, output = safe_git_command(
+                ["git", "clone", ssh_url, str(info_master_path)],
+                Path(self.info_master_temp_dir),
+                self.logger,
+            )
+            if success:
+                self.logger.info("Successfully cloned info-master repository via SSH")
+            else:
+                self.logger.warning(f"SSH clone failed, falling back to HTTPS: {output}")
+
+        # Fall back to HTTPS if SSH not available or failed
+        if not success:
+            self.logger.info(
+                f"Cloning info-master repository via HTTPS to: {info_master_path}"
+            )
+            success, output = safe_git_command(
+                ["git", "clone", https_url, str(info_master_path)],
+                Path(self.info_master_temp_dir),
+                self.logger,
+            )
+
         if success:
             self.logger.info("Successfully cloned info-master repository")
             # Register cleanup handler

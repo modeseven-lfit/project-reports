@@ -135,13 +135,62 @@ jobs:
           # for comprehensive data mining and reporting purposes
           move-conflicting: "true"
 
+      - name: "Set up SSH key for Gerrit info-master"
+        shell: bash
+        env:
+          SSH_KEY: ${{ secrets.LF_GERRIT_INFO_MASTER_SSH_KEY }}
+        run: |
+          if [ -z "$SSH_KEY" ]; then
+            echo "::warning::LF_GERRIT_INFO_MASTER_SSH_KEY secret not set"
+            echo "Will attempt HTTPS clone as fallback"
+            echo "SSH_AVAILABLE=false" >> "$GITHUB_ENV"
+          else
+            echo "🔑 Setting up SSH key for Gerrit operations"
+            mkdir -p ~/.ssh
+            chmod 700 ~/.ssh
+
+            # Write SSH key to file
+            echo "$SSH_KEY" > ~/.ssh/gerrit_info_master
+            chmod 600 ~/.ssh/gerrit_info_master
+
+            # Configure SSH for gerrit.linuxfoundation.org
+            cat >> ~/.ssh/config <<EOF
+          Host gerrit.linuxfoundation.org
+            HostName gerrit.linuxfoundation.org
+            User modesevenindustrialsolutions
+            Port 29418
+            IdentityFile ~/.ssh/gerrit_info_master
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+          EOF
+            chmod 600 ~/.ssh/config
+
+            echo "✅ SSH key configured for gerrit.linuxfoundation.org"
+            echo "SSH_AVAILABLE=true" >> "$GITHUB_ENV"
+          fi
+
       - name: "Clone info-master repository"
         shell: bash
         # yamllint disable rule:line-length
         run: |
           echo "🔗 Cloning info-master repository for additional context data"
-          git clone "https://gerrit.linuxfoundation.org/infra/releng/info-master" ./info-master
-          echo "✅ Info-master repository cloned successfully"
+
+          # Try SSH first if available, fall back to HTTPS
+          if [ "${SSH_AVAILABLE:-false}" = "true" ]; then
+            echo "Attempting SSH clone..."
+            if git clone "ssh://modesevenindustrialsolutions@gerrit.linuxfoundation.org:29418/releng/info-master" ./info-master; then
+              echo "✅ Info-master repository cloned successfully via SSH"
+            else
+              echo "::warning::SSH clone failed, falling back to HTTPS"
+              git clone "https://gerrit.linuxfoundation.org/infra/releng/info-master" ./info-master
+              echo "✅ Info-master repository cloned successfully via HTTPS"
+            fi
+          else
+            echo "SSH not available, using HTTPS clone..."
+            git clone "https://gerrit.linuxfoundation.org/infra/releng/info-master" ./info-master
+            echo "✅ Info-master repository cloned successfully via HTTPS"
+          fi
+
           echo "📁 Sample files:"
           find ./info-master -maxdepth 1 -name "*.yaml" | head -3
           echo "📂 Sample directories:"
@@ -165,6 +214,7 @@ jobs:
         env:
           JENKINS_HOST: ${{ matrix.jenkins }}
           GITHUB_TOKEN: ${{ secrets.GERRIT_REPORTS_PAT_TOKEN }}
+          SSH_AVAILABLE: ${{ env.SSH_AVAILABLE }}
         run: |
           project="${{ matrix.project }}"
           echo "📊 Starting comprehensive analytics for $project"

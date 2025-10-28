@@ -43,6 +43,40 @@ contains an array of project configurations:
 4. Name: `PROJECTS_JSON`
 5. Value: The JSON array above (customize as needed)
 
+### GitHub Secret: LF_GERRIT_INFO_MASTER_SSH_KEY
+
+The workflow requires SSH authentication to clone the `info-master` repository
+from `gerrit.linuxfoundation.org`. Configure this using a GitHub Actions
+secret.
+
+#### Setting up the SSH Key Secret
+
+1. Generate an SSH private key that has access to the
+   `releng/info-master` repository on gerrit.linuxfoundation.org
+2. Go to your repository's **Settings** → **Secrets and variables** →
+   **Actions**
+3. Click **Secrets** tab
+4. Click **New repository secret**
+5. Name: `LF_GERRIT_INFO_MASTER_SSH_KEY`
+6. Value: The complete SSH private key (including headers like
+   `-----BEGIN OPENSSH PRIVATE KEY-----`)
+
+#### SSH Configuration Details
+
+The workflow automatically:
+
+- Sets up the SSH key in the runner's `~/.ssh/` directory
+- Configures SSH to use the key for `gerrit.linuxfoundation.org:29418`
+- Uses the username `modesevenindustrialsolutions` for Gerrit connections
+- Falls back to HTTPS cloning if the SSH key is not configured
+
+The Python analytics script (`generate_reports.py`) respects the `SSH_AVAILABLE`
+environment variable set by the workflow and will:
+
+- Attempt SSH clone of info-master when SSH authentication succeeds
+- Fall back to HTTPS clone if SSH is unavailable or fails
+- Log the clone method used for debugging purposes
+
 ## Workflow Structure
 
 ### Jobs
@@ -161,6 +195,12 @@ schedule:
 2. **Invalid JSON**: Check JSON syntax using online tools
 3. **Gerrit connectivity**: Check that Gerrit servers are accessible
 4. **Permission errors**: Verify repository permissions and secrets
+5. **SSH authentication failures**:
+   - Verify you have added the `LF_GERRIT_INFO_MASTER_SSH_KEY` secret
+     with the proper value
+   - Check that the SSH key has appropriate permissions on Gerrit
+   - Review workflow logs for SSH-related error messages
+   - The workflow will fall back to HTTPS if SSH fails
 
 ### Debugging
 
