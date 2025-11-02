@@ -3464,22 +3464,17 @@ class FeatureRegistry:
             Derived GitHub organization name, or empty string if derivation fails
         """
         try:
-            host_lower = gerrit_host.lower()
+            # Split hostname on dots and extract the middle part
+            # Examples:
+            #   gerrit.onap.org -> ['gerrit', 'onap', 'org'] -> 'onap'
+            #   gerrit.o-ran-sc.org -> ['gerrit', 'o-ran-sc', 'org'] -> 'o-ran-sc'
+            #   git.opendaylight.org -> ['git', 'opendaylight', 'org'] -> 'opendaylight'
+            #   gerrit.fd.io -> ['gerrit', 'fd', 'io'] -> 'fd'
             
-            # Remove 'gerrit.' or 'git.' prefix
-            if host_lower.startswith('gerrit.'):
-                remaining = gerrit_host[len('gerrit.'):]
-            elif host_lower.startswith('git.'):
-                remaining = gerrit_host[len('git.'):]
-            else:
-                return ""
-            
-            # Remove TLD suffix (.org, .io, .com, etc)
-            # Split on '.' and take everything except the last part
-            parts = remaining.split('.')
-            if len(parts) >= 2:
-                # Join all but the last part (TLD)
-                github_org = '.'.join(parts[:-1])
+            parts = gerrit_host.split('.')
+            if len(parts) >= 3:
+                # Take the part between the first dot and last dot
+                github_org = parts[1]
                 self.logger.debug(
                     f"Derived GitHub org '{github_org}' from hostname '{gerrit_host}'"
                 )
@@ -6354,18 +6349,11 @@ def main() -> int:
             for part in args.repos_path.parts:
                 part_lower = part.lower()
                 if 'gerrit.' in part_lower or 'git.' in part_lower:
-                    # Extract org from hostname
-                    if part_lower.startswith('gerrit.'):
-                        remaining = part[len('gerrit.'):]
-                    elif part_lower.startswith('git.'):
-                        remaining = part[len('git.'):]
-                    else:
-                        continue
-                    
-                    # Remove TLD (.org, .io, etc.)
-                    parts = remaining.split('.')
-                    if len(parts) >= 2:
-                        github_org = '.'.join(parts[:-1])
+                    # Split on dots and extract the middle part
+                    # Examples: gerrit.onap.org -> onap, git.opendaylight.org -> opendaylight
+                    parts = part.split('.')
+                    if len(parts) >= 3:
+                        github_org = parts[1]
                         print(f"ℹ️  Derived GitHub organization '{github_org}' from repository path", file=sys.stderr)
                         # Store in config so FeatureRegistry can use it
                         config["github"] = github_org
