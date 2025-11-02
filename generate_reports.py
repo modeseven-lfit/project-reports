@@ -2582,21 +2582,12 @@ class FeatureRegistry:
         self.logger = logger
         self.checks: dict[str, Any] = {}
         
-        # Determine GitHub organization once at initialization
-        self.github_org = self._determine_github_org()
-        self.github_org_source = "not_configured"
+        # Get GitHub organization from config (already determined centrally in main())
+        self.github_org = self.config.get("github", "")
+        self.github_org_source = self.config.get("_github_org_source", "not_configured")
         
         if self.github_org:
-            # Log how we got the GitHub org
-            if os.environ.get("GITHUB_ORG"):
-                self.github_org_source = "environment_variable"
-                self.logger.info(f"GitHub organization set from GITHUB_ORG environment variable: '{self.github_org}'")
-            elif self.config.get("github"):
-                self.github_org_source = "config_file"
-                self.logger.info(f"GitHub organization set from config file: '{self.github_org}'")
-            elif self.config.get("extensions", {}).get("github_api", {}).get("github_org"):
-                self.github_org_source = "config_extensions"
-                self.logger.info(f"GitHub organization set from extensions config: '{self.github_org}'")
+            self.logger.debug(f"GitHub organization: '{self.github_org}' (source: {self.github_org_source})")
         
         self._register_default_checks()
 
@@ -3427,66 +3418,6 @@ class FeatureRegistry:
             )
             return "", ""
 
-    def _determine_github_org(self) -> str:
-        """Determine GitHub organization once at initialization.
-        
-        Priority order:
-        1. GITHUB_ORG environment variable (from workflow matrix)
-        2. config["github"] (from project config)
-        3. config["extensions"]["github_api"]["github_org"] (from config)
-        
-        Returns:
-            GitHub organization name, or empty string if not found
-        """
-        # Priority: GITHUB_ORG env var > config["github"] > config["extensions"]["github_api"]["github_org"]
-        github_org = (
-            os.environ.get("GITHUB_ORG", "") or
-            self.config.get("github", "") or
-            self.config.get("extensions", {})
-            .get("github_api", {})
-            .get("github_org", "")
-        )
-        
-        return github_org
-
-    def _derive_github_org_from_gerrit_host(self, gerrit_host: str) -> str:
-        """Derive GitHub organization name from Gerrit hostname.
-        
-        For example:
-        - gerrit.onap.org -> 'onap'
-        - gerrit.o-ran-sc.org -> 'o-ran-sc'
-        - git.opendaylight.org -> 'opendaylight'
-        
-        Args:
-            gerrit_host: Gerrit hostname (e.g., "gerrit.onap.org")
-            
-        Returns:
-            Derived GitHub organization name, or empty string if derivation fails
-        """
-        try:
-            # Split hostname on dots and extract the middle part
-            # Examples:
-            #   gerrit.onap.org -> ['gerrit', 'onap', 'org'] -> 'onap'
-            #   gerrit.o-ran-sc.org -> ['gerrit', 'o-ran-sc', 'org'] -> 'o-ran-sc'
-            #   git.opendaylight.org -> ['git', 'opendaylight', 'org'] -> 'opendaylight'
-            #   gerrit.fd.io -> ['gerrit', 'fd', 'io'] -> 'fd'
-            
-            parts = gerrit_host.split('.')
-            if len(parts) >= 3:
-                # Take the part between the first dot and last dot
-                github_org = parts[1]
-                self.logger.debug(
-                    f"Derived GitHub org '{github_org}' from hostname '{gerrit_host}'"
-                )
-                return github_org
-            
-            return ""
-            
-        except Exception as e:
-            self.logger.debug(
-                f"Failed to derive GitHub org from hostname {gerrit_host}: {e}"
-            )
-            return ""
 
 
 
@@ -6184,6 +6115,44 @@ class RepositoryReporter:
             }
 
 
+def determine_github_org(config: dict[str, Any], repos_path: Path) -> tuple[str, str]:
+    """Determine GitHub organization once - centralized function.
+    
+    Priority:
+    1. GITHUB_ORG environment variable (from PROJECTS_JSON matrix.github)
+    2. Auto-derive from repos_path hostname
+    
+    Args:
+        config: Configuration dictionary
+        repos_path: Path to repositories directory
+        
+    Returns:
+        Tuple of (github_org, source) where source is:
+        - "environment_variable" if from GITHUB_ORG env var (PROJECTS_JSON)
+        - "auto_derived" if derived from hostname
+        - "" if not found
+    """
+    # Check GITHUB_ORG environment variable (from PROJECTS_JSON matrix.github)
+    github_org = os.environ.get("GITHUB_ORG", "")
+    if github_org:
+        return github_org, "environment_variable"
+    
+    # Auto-derive from repos_path hostname
+    # Examples: ./gerrit.onap.org -> onap, ./git.opendaylight.org -> opendaylight
+    for part in repos_path.parts:
+        part_lower = part.lower()
+        if 'gerrit.' in part_lower or 'git.' in part_lower:
+            # Split hostname on dots and extract middle part
+            # gerrit.onap.org -> ['gerrit', 'onap', 'org'] -> 'onap'
+            parts = part.split('.')
+            if len(parts) >= 3:
+                github_org = parts[1]
+                return github_org, "auto_derived"
+    
+    # Not found
+    return "", ""
+
+
 def parse_arguments() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
@@ -6277,11 +6246,8 @@ def write_config_to_step_summary(config: dict[str, Any], project: str) -> None:
             # Validate GitHub API prerequisites
             github_api_enabled = config.get("extensions", {}).get("github_api", {}).get("enabled", False)
             github_token = config.get("extensions", {}).get("github_api", {}).get("token") or os.environ.get("CLASSIC_READ_ONLY_PAT_TOKEN")
-            github_org = (
-                os.environ.get("GITHUB_ORG", "") or
-                config.get("github", "") or
-                config.get("extensions", {}).get("github_api", {}).get("github_org", "")
-            )
+            github_org = config.get("github", "")
+            github_org_source = config.get("_github_org_source", "")
             
             f.write("### 🔧 GitHub API Integration Status\n\n")
             
@@ -6296,12 +6262,14 @@ def write_config_to_step_summary(config: dict[str, Any], project: str) -> None:
                 
                 # Check for github org and show source
                 if github_org:
-                    if os.environ.get("GITHUB_ORG"):
-                        f.write(f"- **GitHub Organization:** ✅ `{github_org}` (from GITHUB_ORG environment variable)\n")
-                    elif config.get("github"):
-                        f.write(f"- **GitHub Organization:** ✅ `{github_org}` (from config)\n")
+                    if github_org_source == "environment_variable":
+                        f.write(f"- **GitHub Organization:** ✅ `{github_org}` [from JSON]\n")
+                    elif github_org_source == "auto_derived":
+                        f.write(f"- **GitHub Organization:** ✅ `{github_org}` [auto/derived]\n")
+                    elif github_org_source in ("config", "config_extensions"):
+                        f.write(f"- **GitHub Organization:** ✅ `{github_org}` [from JSON]\n")
                     else:
-                        f.write(f"- **GitHub Organization:** ✅ `{github_org}` (from extensions config)\n")
+                        f.write(f"- **GitHub Organization:** ✅ `{github_org}`\n")
                 else:
                     f.write("- **GitHub Organization:** ❌ **NOT CONFIGURED**\n")
                     f.write("\n> **⚠️ WARNING:** GitHub organization not configured!\n")
@@ -6336,28 +6304,19 @@ def main() -> int:
             print(f"ERROR: Failed to load configuration: {e}", file=sys.stderr)
             return 1
 
-        # Derive GitHub organization from repos_path if not configured
-        github_org = (
-            os.environ.get("GITHUB_ORG", "") or
-            config.get("github", "") or
-            config.get("extensions", {}).get("github_api", {}).get("github_org", "")
-        )
+        # Determine GitHub organization once - centralized
+        github_org, github_org_source = determine_github_org(config, args.repos_path)
         
-        if not github_org:
-            # Try to derive from repos_path (e.g., "./gerrit.onap.org" -> "onap")
-            repos_path_str = str(args.repos_path)
-            for part in args.repos_path.parts:
-                part_lower = part.lower()
-                if 'gerrit.' in part_lower or 'git.' in part_lower:
-                    # Split on dots and extract the middle part
-                    # Examples: gerrit.onap.org -> onap, git.opendaylight.org -> opendaylight
-                    parts = part.split('.')
-                    if len(parts) >= 3:
-                        github_org = parts[1]
-                        print(f"ℹ️  Derived GitHub organization '{github_org}' from repository path", file=sys.stderr)
-                        # Store in config so FeatureRegistry can use it
-                        config["github"] = github_org
-                        break
+        if github_org:
+            # Store in config for all components to use
+            config["github"] = github_org
+            config["_github_org_source"] = github_org_source
+            
+            # Log what we determined
+            if github_org_source == "auto_derived":
+                print(f"ℹ️  Derived GitHub organization '{github_org}' from repository path", file=sys.stderr)
+            elif github_org_source == "environment_variable":
+                print(f"ℹ️  GitHub organization '{github_org}' from PROJECTS_JSON", file=sys.stderr)
 
         # Override log level if specified
         if args.log_level:
