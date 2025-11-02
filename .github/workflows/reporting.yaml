@@ -48,7 +48,75 @@ jobs:
           echo "PROJECTS_JSON variable exists"
           echo "Raw content: ${{ vars.PROJECTS_JSON }}"
 
-      - name: "Parse and validate JSON structure"
+      - name: "Validate required secrets"
+        shell: bash
+        env:
+          CLASSIC_READ_ONLY_PAT_TOKEN: ${{ secrets.CLASSIC_READ_ONLY_PAT_TOKEN }}
+          GERRIT_REPORTS_PAT_TOKEN: ${{ secrets.GERRIT_REPORTS_PAT_TOKEN }}
+          LF_GERRIT_INFO_MASTER_SSH_KEY: ${{ secrets.LF_GERRIT_INFO_MASTER_SSH_KEY }}
+        run: |
+          validation_failed=false
+          
+          echo "🔐 Validating required secrets..."
+          
+          # Check CLASSIC_READ_ONLY_PAT_TOKEN
+          if [ -z "$CLASSIC_READ_ONLY_PAT_TOKEN" ]; then
+            echo "::error::CLASSIC_READ_ONLY_PAT_TOKEN secret is not set or is empty"
+            echo "❌ CLASSIC_READ_ONLY_PAT_TOKEN: MISSING"
+            validation_failed=true
+          else
+            echo "✅ CLASSIC_READ_ONLY_PAT_TOKEN: Present"
+          fi
+          
+          # Check GERRIT_REPORTS_PAT_TOKEN
+          if [ -z "$GERRIT_REPORTS_PAT_TOKEN" ]; then
+            echo "::error::GERRIT_REPORTS_PAT_TOKEN secret is not set or is empty"
+            echo "❌ GERRIT_REPORTS_PAT_TOKEN: MISSING"
+            validation_failed=true
+          else
+            echo "✅ GERRIT_REPORTS_PAT_TOKEN: Present"
+          fi
+          
+          # Check LF_GERRIT_INFO_MASTER_SSH_KEY
+          if [ -z "$LF_GERRIT_INFO_MASTER_SSH_KEY" ]; then
+            echo "::warning::LF_GERRIT_INFO_MASTER_SSH_KEY secret is not set or is empty"
+            echo "⚠️  LF_GERRIT_INFO_MASTER_SSH_KEY: MISSING (will fall back to HTTPS)"
+          else
+            echo "✅ LF_GERRIT_INFO_MASTER_SSH_KEY: Present"
+          fi
+          
+          # Write summary
+          {
+            echo "## 🔐 Secrets Validation"
+            echo ""
+            if [ -n "$CLASSIC_READ_ONLY_PAT_TOKEN" ]; then
+              echo "- ✅ **CLASSIC_READ_ONLY_PAT_TOKEN:** Present"
+            else
+              echo "- ❌ **CLASSIC_READ_ONLY_PAT_TOKEN:** MISSING"
+            fi
+            
+            if [ -n "$GERRIT_REPORTS_PAT_TOKEN" ]; then
+              echo "- ✅ **GERRIT_REPORTS_PAT_TOKEN:** Present"
+            else
+              echo "- ❌ **GERRIT_REPORTS_PAT_TOKEN:** MISSING"
+            fi
+            
+            if [ -n "$LF_GERRIT_INFO_MASTER_SSH_KEY" ]; then
+              echo "- ✅ **LF_GERRIT_INFO_MASTER_SSH_KEY:** Present"
+            else
+              echo "- ⚠️ **LF_GERRIT_INFO_MASTER_SSH_KEY:** MISSING (HTTPS fallback will be used)"
+            fi
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+          
+          if [ "$validation_failed" = true ]; then
+            echo "::error::Secret validation failed - missing required secrets"
+            exit 1
+          fi
+          
+          echo "✅ All required secrets are present"
+
+      - name: "Parse and validate PROJECTS_JSON"
         id: parse-projects
         shell: bash
         run: |
@@ -305,7 +373,7 @@ jobs:
 
 
   publish:
-    name: "Publish Reports to gerrit-reports"
+    name: "Publish Reports"
     needs: [verify, analyze]
     if: always()
     runs-on: ubuntu-latest
@@ -323,7 +391,7 @@ jobs:
         # yamllint disable-line rule:line-length
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
-      - name: "Download all report artifacts"
+      - name: "Download report artifacts"
         # yamllint disable-line rule:line-length
         uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
         with:
@@ -331,7 +399,7 @@ jobs:
           path: ./downloaded-reports
         continue-on-error: true
 
-      - name: "Publish all reports in batch"
+      - name: "Publish reports"
         env:
           REPORTS_TOKEN: ${{ secrets.GERRIT_REPORTS_PAT_TOKEN }}
           REPORTS_REPO: modeseven-lfit/gerrit-reports
@@ -339,8 +407,9 @@ jobs:
         shell: bash
         run: |
           bash .github/scripts/publish-reports.sh
+
   summary:
-    name: "Generate Summary Report"
+    name: "Generate Summary"
     needs: [verify, publish]
     if: always()
     runs-on: ubuntu-latest
@@ -355,7 +424,7 @@ jobs:
         with:
           egress-policy: "audit"
 
-      - name: "Download all analysis results"
+      - name: "Download all results"
         # yamllint disable-line rule:line-length
         uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
         with:
@@ -394,7 +463,7 @@ jobs:
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "Job summary generated at run-time" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: "Trigger GitHub Pages update"
+      - name: "Update GitHub Pages"
         if: success()
         env:
           REPORTS_TOKEN: ${{ secrets.GERRIT_REPORTS_PAT_TOKEN }}
