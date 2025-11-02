@@ -217,6 +217,7 @@ jobs:
           JENKINS_HOST: ${{ matrix.jenkins }}
           # yamllint disable-line rule:line-length
           CLASSIC_READ_ONLY_PAT_TOKEN: ${{ secrets.CLASSIC_READ_ONLY_PAT_TOKEN }}
+          GITHUB_ORG: ${{ matrix.github }}
           SSH_AVAILABLE: ${{ env.SSH_AVAILABLE }}
         run: |
           project="${{ matrix.project }}"

@@ -3054,19 +3054,48 @@ class FeatureRegistry:
 
         is_github_repo = self._is_github_repository(repo_path)
 
+        # Get GitHub organization from configuration
+        # Priority: GITHUB_ORG env var > config["github"] > config["extensions"]["github_api"]["github_org"]
+        github_org = (
+            os.environ.get("GITHUB_ORG", "") or
+            self.config.get("github", "") or
+            self.config.get("extensions", {})
+            .get("github_api", {})
+            .get("github_org", "")
+        )
+        
+        github_org_derived = False
+        
+        # If github_org not configured, try to derive from Gerrit hostname
+        if not github_org:
+            github_org = self._derive_github_org_from_path(repo_path)
+            if github_org:
+                github_org_derived = True
+                self.logger.info(
+                    f"Derived GitHub organization '{github_org}' from repository path for {repo_path.name}"
+                )
+
         self.logger.debug(
             f"GitHub API integration check for {repo_path.name}: "
             f"enabled={github_api_enabled}, has_token={bool(github_token)}, "
-            f"is_github_repo={is_github_repo}"
+            f"github_org={github_org} (derived={github_org_derived}), is_github_repo={is_github_repo}"
         )
+
+        # Validate prerequisites for GitHub API integration
+        if github_api_enabled and not github_token:
+            self.logger.warning(
+                f"GitHub API enabled but token not available (CLASSIC_READ_ONLY_PAT_TOKEN). "
+                f"Workflow status will not be queried for {repo_path.name}"
+            )
 
         if (
             github_api_enabled
             and github_token
+            and github_org
             and is_github_repo
         ):
             try:
-                owner, repo_name = self._extract_github_repo_info(repo_path)
+                owner, repo_name = self._extract_github_repo_info(repo_path, github_org)
                 self.logger.info(
                     f"Attempting GitHub API query for {owner}/{repo_name}"
                 )
@@ -3081,6 +3110,11 @@ class FeatureRegistry:
                     # Merge GitHub API data with static analysis
                     result["github_api_data"] = github_status
                     result["has_runtime_status"] = True
+                    
+                    # Report successful derivation to step summary
+                    if github_org_derived:
+                        self._report_github_org_derivation_success(owner, repo_name)
+                    
                     self.logger.debug(
                         f"Retrieved GitHub workflow status for {owner}/{repo_name}"
                     )
@@ -3106,6 +3140,10 @@ class FeatureRegistry:
                 self.logger.warning(
                     f"Failed to fetch GitHub workflow status for {repo_path}: {e}"
                 )
+                
+                # Report failed derivation to step summary
+                if github_org_derived:
+                    self._report_github_org_derivation_failure(github_org, repo_path.name, str(e))
 
         return result
 
@@ -3301,15 +3339,23 @@ class FeatureRegistry:
         except Exception:
             return False
 
-    def _extract_github_repo_info(self, repo_path: Path) -> tuple[str, str]:
-        """Extract GitHub owner and repo name from git remote."""
+    def _extract_github_repo_info(self, repo_path: Path, github_org: str = "") -> tuple[str, str]:
+        """Extract GitHub owner and repo name from git remote or configuration.
+        
+        Args:
+            repo_path: Path to the repository
+            github_org: GitHub organization name from configuration (for Gerrit mirrors)
+            
+        Returns:
+            Tuple of (owner, repo_name)
+        """
         try:
             git_dir = repo_path / ".git"
             config_file = git_dir / "config"
 
             if not config_file.exists():
-                # For ONAP repos, try to infer from path structure
-                return self._infer_github_info_from_path(repo_path)
+                # For mirrored repos, use configured github_org
+                return self._infer_github_info_from_path(repo_path, github_org)
 
             with open(config_file, "r") as f:
                 content = f.read()
@@ -3332,30 +3378,158 @@ class FeatureRegistry:
                     return owner, repo
 
             # Fallback to path-based inference for mirrored repos
-            return self._infer_github_info_from_path(repo_path)
+            return self._infer_github_info_from_path(repo_path, github_org)
         except Exception:
             return "", ""
 
-    def _infer_github_info_from_path(self, repo_path: Path) -> tuple[str, str]:
-        """Infer GitHub owner/repo from repository path for mirrored repos like ONAP."""
+    def _infer_github_info_from_path(self, repo_path: Path, github_org: str = "") -> tuple[str, str]:
+        """Infer GitHub owner/repo from repository path for mirrored repos.
+        
+        For Gerrit repos mirrored to GitHub, the path structure is typically:
+        ./gerrit.example.org/repo-name -> github_org/repo-name
+        
+        Args:
+            repo_path: Path to the repository
+            github_org: GitHub organization name from configuration
+            
+        Returns:
+            Tuple of (owner, repo_name)
+        """
         try:
-            # For ONAP repos: /path/to/ONAP/project/subproject -> onap/project-subproject
+            if not github_org:
+                self.logger.debug(
+                    f"Cannot infer GitHub info for {repo_path.name}: github_org not provided"
+                )
+                return "", ""
+            
+            # Get just the repository name from the path
+            # For paths like ./gerrit.onap.org/aai/babel, we want "aai-babel"
+            # For paths like ./gerrit.onap.org/simple-repo, we want "simple-repo"
             path_parts = repo_path.parts
+            
+            # Find the Gerrit host in the path (e.g., "gerrit.onap.org")
+            gerrit_host_index = -1
+            for i, part in enumerate(path_parts):
+                if "gerrit" in part.lower() or "git" in part.lower():
+                    gerrit_host_index = i
+                    break
+            
+            if gerrit_host_index >= 0 and gerrit_host_index < len(path_parts) - 1:
+                # Get all path components after the gerrit host
+                repo_parts = path_parts[gerrit_host_index + 1:]
+                if repo_parts:
+                    # Join multi-level paths with hyphens
+                    # e.g., ["aai", "babel"] -> "aai-babel"
+                    repo_name = "-".join(repo_parts)
+                    self.logger.debug(
+                        f"Inferred GitHub repo: {github_org}/{repo_name} from path {repo_path}"
+                    )
+                    return github_org, repo_name
+            
+            # Fallback: use just the repo name
+            repo_name = repo_path.name
+            self.logger.debug(
+                f"Using fallback GitHub repo: {github_org}/{repo_name} from path {repo_path}"
+            )
+            return github_org, repo_name
 
-            # Look for ONAP in the path
-            if "ONAP" in path_parts:
-                onap_index = path_parts.index("ONAP")
-                if onap_index < len(path_parts) - 1:
-                    # Get the project path after ONAP
-                    project_parts = path_parts[onap_index + 1 :]
-                    if project_parts:
-                        # Convert path like "aai/babel" to "onap/aai-babel"
-                        repo_name = "-".join(project_parts)
-                        return "onap", repo_name
-
+        except Exception as e:
+            self.logger.debug(
+                f"Failed to infer GitHub info for {repo_path}: {e}"
+            )
             return "", ""
+
+    def _derive_github_org_from_path(self, repo_path: Path) -> str:
+        """Derive GitHub organization name from Gerrit hostname in path.
+        
+        For example:
+        - ./gerrit.onap.org/repo -> 'onap'
+        - ./gerrit.o-ran-sc.org/repo -> 'o-ran-sc'
+        - ./git.opendaylight.org/repo -> 'opendaylight'
+        
+        Args:
+            repo_path: Path to the repository
+            
+        Returns:
+            Derived GitHub organization name, or empty string if derivation fails
+        """
+        try:
+            path_parts = repo_path.parts
+            
+            # Look for gerrit/git hostname in the path
+            for part in path_parts:
+                part_lower = part.lower()
+                
+                # Check if this looks like a Gerrit/Git hostname
+                if 'gerrit.' in part_lower or 'git.' in part_lower:
+                    # Extract the middle part between gerrit./git. and .org/.io/etc
+                    # Examples:
+                    #   gerrit.onap.org -> onap
+                    #   gerrit.o-ran-sc.org -> o-ran-sc
+                    #   git.opendaylight.org -> opendaylight
+                    
+                    # Remove 'gerrit.' or 'git.' prefix
+                    if part_lower.startswith('gerrit.'):
+                        remaining = part[8:]  # len('gerrit.') = 8
+                    elif part_lower.startswith('git.'):
+                        remaining = part[4:]  # len('git.') = 4
+                    else:
+                        continue
+                    
+                    # Remove TLD suffix (.org, .io, .com, etc)
+                    # Split on '.' and take everything except the last part
+                    parts = remaining.split('.')
+                    if len(parts) >= 2:
+                        # Join all but the last part (TLD)
+                        github_org = '.'.join(parts[:-1])
+                        
+                        self.logger.debug(
+                            f"Derived GitHub org '{github_org}' from hostname '{part}'"
+                        )
+                        return github_org
+            
+            self.logger.debug(
+                f"Could not derive GitHub org from path: {repo_path}"
+            )
+            return ""
+            
+        except Exception as e:
+            self.logger.debug(
+                f"Failed to derive GitHub org from path {repo_path}: {e}"
+            )
+            return ""
+
+    def _report_github_org_derivation_success(self, owner: str, repo_name: str) -> None:
+        """Report successful GitHub org derivation to step summary."""
+        step_summary_file = os.environ.get("GITHUB_STEP_SUMMARY")
+        if not step_summary_file:
+            return
+        
+        try:
+            with open(step_summary_file, "a") as f:
+                f.write(f"\n> ✅ **GitHub organization derived successfully:** `{owner}` for repository `{repo_name}`\n")
         except Exception:
-            return "", ""
+            pass
+
+    def _report_github_org_derivation_failure(self, github_org: str, repo_name: str, error: str) -> None:
+        """Report failed GitHub org derivation to step summary."""
+        step_summary_file = os.environ.get("GITHUB_STEP_SUMMARY")
+        if not step_summary_file:
+            return
+        
+        try:
+            with open(step_summary_file, "a") as f:
+                f.write(f"\n> ❌ **GitHub API query failed** using derived organization `{github_org}` for `{repo_name}`\n")
+                f.write(f"> \n")
+                f.write(f"> **Error:** {error}\n")
+                f.write(f"> \n")
+                f.write(f"> **Possible causes:**\n")
+                f.write(f"> - Repository may not exist on GitHub as `{github_org}/{repo_name}`\n")
+                f.write(f"> - Repository naming may differ between Gerrit and GitHub\n")
+                f.write(f"> - Add explicit `github_org` mapping to PROJECTS_JSON to override auto-detection\n")
+                f.write(f"> \n")
+        except Exception:
+            pass
 
     def _check_gitreview(self, repo_path: Path) -> dict[str, Any]:
         """Check for .gitreview configuration file."""
@@ -6140,6 +6314,56 @@ def write_config_to_step_summary(config: dict[str, Any], project: str) -> None:
             f.write(
                 f"- **Config Digest:** `{compute_config_digest(config)[:12]}...`\n\n"
             )
+            
+            # Validate GitHub API prerequisites
+            github_api_enabled = config.get("extensions", {}).get("github_api", {}).get("enabled", False)
+            github_token = config.get("extensions", {}).get("github_api", {}).get("token") or os.environ.get("CLASSIC_READ_ONLY_PAT_TOKEN")
+            github_org = config.get("extensions", {}).get("github_api", {}).get("github_org", "")
+            
+            f.write("### 🔧 GitHub API Integration Status\n\n")
+            
+            if github_api_enabled:
+                f.write("- **Enabled:** ✅ Yes\n")
+                
+                # Check for token
+                if github_token:
+                    f.write("- **Token:** ✅ Present (CLASSIC_READ_ONLY_PAT_TOKEN)\n")
+                else:
+                    f.write("- **Token:** ❌ **MISSING** - Set `CLASSIC_READ_ONLY_PAT_TOKEN` secret\n")
+                
+                # Check for github org
+                if github_org:
+                    f.write(f"- **GitHub Organization:** ✅ `{github_org}`\n")
+                else:
+                    f.write("- **GitHub Organization:** ⚠️ **Will attempt auto-detection from Gerrit hostname**\n")
+                    f.write("\n> **ℹ️ INFO:** GitHub organization not explicitly configured.\n")
+                    f.write("> \n")
+                    f.write("> The system will attempt to derive the GitHub organization from the Gerrit hostname.\n")
+                    f.write("> \n")
+                    f.write("> **Examples of auto-detection:**\n")
+                    f.write("> - `gerrit.onap.org` → `onap`\n")
+                    f.write("> - `gerrit.o-ran-sc.org` → `o-ran-sc`\n")
+                    f.write("> - `git.opendaylight.org` → `opendaylight`\n")
+                    f.write("> \n")
+                    f.write("> **To override auto-detection**, add explicit mapping to PROJECTS_JSON:\n")
+                    f.write("> ```json\n")
+                    f.write("> {\n")
+                    f.write(f'>   "project": "{project}",\n')
+                    f.write('>   "gerrit": "gerrit.example.org",\n')
+                    f.write('>   "github": "my-github-org"\n')
+                    f.write("> }\n")
+                    f.write("> ```\n\n")
+                
+                # Overall status
+                if github_token and github_org:
+                    f.write("\n**Status:** ✅ GitHub API integration fully configured\n\n")
+                elif github_token and not github_org:
+                    f.write("\n**Status:** ⚠️ GitHub API will attempt auto-detection (check logs for results)\n\n")
+                else:
+                    f.write("\n**Status:** ❌ GitHub API integration **DISABLED** due to missing token\n\n")
+            else:
+                f.write("- **Enabled:** ❌ No (disabled in configuration)\n\n")
+                
     except Exception as e:
         # Silently fail - step summary is nice-to-have, not critical
         pass
