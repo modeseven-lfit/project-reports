@@ -3468,9 +3468,9 @@ class FeatureRegistry:
             
             # Remove 'gerrit.' or 'git.' prefix
             if host_lower.startswith('gerrit.'):
-                remaining = gerrit_host[8:]  # len('gerrit.') = 8
+                remaining = gerrit_host[len('gerrit.'):]
             elif host_lower.startswith('git.'):
-                remaining = gerrit_host[4:]  # len('git.') = 4
+                remaining = gerrit_host[len('git.'):]
             else:
                 return ""
             
@@ -6356,9 +6356,9 @@ def main() -> int:
                 if 'gerrit.' in part_lower or 'git.' in part_lower:
                     # Extract org from hostname
                     if part_lower.startswith('gerrit.'):
-                        remaining = part[8:]
+                        remaining = part[len('gerrit.'):]
                     elif part_lower.startswith('git.'):
-                        remaining = part[4:]
+                        remaining = part[len('git.'):]
                     else:
                         continue
                     
