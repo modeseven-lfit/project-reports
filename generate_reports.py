@@ -35,6 +35,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import zipfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union, cast
@@ -249,6 +250,10 @@ class APIStatistics:
 
         except Exception as e:
             logging.debug(f"Could not write API statistics to GITHUB_STEP_SUMMARY: {e}")
+
+
+# Singleton lock for Jenkins job allocation (thread-safety)
+_jenkins_allocation_lock = threading.Lock()
 
 
 # Global statistics tracker
@@ -1485,7 +1490,7 @@ class GitDataCollector:
         ] = {}  # Cache for Jenkins job data
         self.allocated_jenkins_jobs: set[str] = (
             set()
-        )  # Track allocated jobs to prevent duplicates
+        )  # Track allocated jobs to prevent duplicates (protected by _jenkins_allocation_lock)
         self.all_jenkins_jobs: dict[str, Any] = {}  # Cache all jobs fetched once
         self.orphaned_jenkins_jobs: dict[
             str, dict[str, Any]
@@ -1861,7 +1866,10 @@ class GitDataCollector:
             return metrics
 
     def _get_jenkins_jobs_for_repo(self, repo_name: str) -> list[dict[str, Any]]:
-        """Get Jenkins jobs for a specific repository with duplicate prevention."""
+        """Get Jenkins jobs for a specific repository with duplicate prevention.
+        
+        Thread-safe: uses global lock to protect allocated_jenkins_jobs mutation.
+        """
         if not self.jenkins_client or not self._jenkins_initialized:
             self.logger.debug(
                 f"No Jenkins client available or cache not initialized for {repo_name}"
@@ -1869,51 +1877,64 @@ class GitDataCollector:
             return []
 
         # Use cached data instead of making API calls
-        if repo_name in self.jenkins_jobs_cache:
-            self.logger.debug(f"Using cached Jenkins jobs for {repo_name}")
-            return self.jenkins_jobs_cache[repo_name]
+        with _jenkins_allocation_lock:
+            if repo_name in self.jenkins_jobs_cache:
+                self.logger.debug(f"Using cached Jenkins jobs for {repo_name}")
+                return self.jenkins_jobs_cache[repo_name]
 
         try:
-            jobs = self.jenkins_client.get_jobs_for_project(
-                repo_name, self.allocated_jenkins_jobs
-            )
-            if jobs:
-                self.logger.debug(
-                    f"Found {len(jobs)} Jenkins jobs for {repo_name}: {[job.get('name') for job in jobs]}"
+            # Lock protects both the allocation check and the cache write
+            with _jenkins_allocation_lock:
+                jobs = self.jenkins_client.get_jobs_for_project(
+                    repo_name, self.allocated_jenkins_jobs
                 )
-                # Cache the results
-                self.jenkins_jobs_cache[repo_name] = jobs
-            else:
-                self.logger.debug(f"No Jenkins jobs found for {repo_name}")
-                self.jenkins_jobs_cache[repo_name] = []
-            return jobs
+                if jobs:
+                    self.logger.debug(
+                        f"Found {len(jobs)} Jenkins jobs for {repo_name}: {[job.get('name') for job in jobs]}"
+                    )
+                    # Cache the results
+                    self.jenkins_jobs_cache[repo_name] = jobs
+                else:
+                    self.logger.debug(f"No Jenkins jobs found for {repo_name}")
+                    self.jenkins_jobs_cache[repo_name] = []
+                return jobs
         except Exception as e:
             self.logger.warning(f"Error fetching Jenkins jobs for {repo_name}: {e}")
-            self.jenkins_jobs_cache[repo_name] = []
+            with _jenkins_allocation_lock:
+                self.jenkins_jobs_cache[repo_name] = []
             return []
 
-    def reset_jenkins_allocation_state(self):
-        """Reset Jenkins job allocation state for a fresh start."""
-        self.allocated_jenkins_jobs.clear()
-        self.jenkins_jobs_cache.clear()
-        self.orphaned_jenkins_jobs.clear()
+    def reset_jenkins_allocation_state(self) -> None:
+        """Reset Jenkins job allocation state for a fresh start.
+        
+        Thread-safe: uses global lock.
+        """
+        with _jenkins_allocation_lock:
+            self.allocated_jenkins_jobs.clear()
+            self.jenkins_jobs_cache.clear()
+            self.orphaned_jenkins_jobs.clear()
         self.logger.info("Reset Jenkins job allocation state")
 
     def get_jenkins_job_allocation_summary(self) -> dict[str, Any]:
-        """Get summary of Jenkins job allocation for auditing purposes."""
+        """Get summary of Jenkins job allocation for auditing purposes.
+        
+        Thread-safe: uses global lock for reading allocation state.
+        """
         if not self.jenkins_client or not self._jenkins_initialized:
             return {"error": "No Jenkins client available or not initialized"}
 
         # Use cached data
-        total_jobs = len(self.all_jenkins_jobs.get("jobs", []))
-        allocated_count = len(self.allocated_jenkins_jobs)
-        unallocated_count = total_jobs - allocated_count
+        with _jenkins_allocation_lock:
+            total_jobs = len(self.all_jenkins_jobs.get("jobs", []))
+            allocated_count = len(self.allocated_jenkins_jobs)
+            unallocated_count = total_jobs - allocated_count
+            allocated_names = sorted(list(self.allocated_jenkins_jobs))
 
         return {
             "total_jenkins_jobs": total_jobs,
             "allocated_jobs": allocated_count,
             "unallocated_jobs": unallocated_count,
-            "allocated_job_names": sorted(list(self.allocated_jenkins_jobs)),
+            "allocated_job_names": allocated_names,
             "allocation_percentage": round((allocated_count / total_jobs * 100), 2)
             if total_jobs > 0
             else 0,
@@ -3960,20 +3981,10 @@ class ReportRenderer:
         Package all report outputs into a ZIP file.
 
         Creates a ZIP containing JSON, Markdown, HTML, and configuration files.
+        
+        This now delegates to create_report_bundle for unified implementation.
         """
-        zip_path = output_dir / f"{project}_report_bundle.zip"
-        self.logger.info(f"Creating ZIP package at {zip_path}")
-
-        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
-            # Add all files in the output directory
-            for file_path in output_dir.iterdir():
-                if file_path.is_file() and file_path != zip_path:
-                    # Add to ZIP with relative path
-                    arcname = f"reports/{project}/{file_path.name}"
-                    zipf.write(file_path, arcname)
-                    self.logger.debug(f"Added {file_path.name} to ZIP")
-
-        return zip_path
+        return create_report_bundle(output_dir, project, self.logger)
 
     def _generate_markdown_content(self, data: dict[str, Any]) -> str:
         """Generate complete Markdown content from JSON data."""
@@ -5607,41 +5618,18 @@ class ReportRenderer:
         return slug
 
     def _format_number(self, num: Union[int, float], signed: bool = False) -> str:
-        """Format number with K/M/B abbreviation."""
-        if not isinstance(num, (int, float)):
-            return "0"
-
-        # Handle negative numbers
-        is_negative = num < 0
-        abs_num = abs(num)
-
-        if abs_num >= 1_000_000_000:
-            formatted = f"{abs_num / 1_000_000_000:.1f}B"
-        elif abs_num >= 1_000_000:
-            formatted = f"{abs_num / 1_000_000:.1f}M"
-        elif abs_num >= 1_000:
-            formatted = f"{abs_num / 1_000:.1f}K"
-        else:
-            formatted = str(int(abs_num))
-
-        # Add sign
-        if is_negative:
-            formatted = f"-{formatted}"
-        elif signed and num > 0:
-            formatted = f"+{formatted}"
-
-        return formatted
+        """Format number with K/M/B abbreviation.
+        
+        Delegates to unified format_number utility.
+        """
+        return format_number(num, signed=signed)
 
     def _format_age(self, days: int) -> str:
-        """Format age in days to actual date."""
-        from datetime import datetime, timedelta
-
-        if days is None or days == 999999:
-            return "Unknown"
-
-        # Calculate actual date
-        date = datetime.now() - timedelta(days=days)
-        return date.strftime("%Y-%m-%d")
+        """Format age in days to actual date.
+        
+        Delegates to unified format_age utility.
+        """
+        return format_age(days)
 
 
 # =============================================================================
@@ -5685,29 +5673,66 @@ def create_report_bundle(
 # =============================================================================
 
 
-def format_number(value: Union[int, float], config: Dict[str, Any]) -> str:
-    """Format numbers with optional abbreviation."""
-    render_config = config.get("render", {})
-
-    if not render_config.get("abbreviate_large_numbers", True):
-        return str(value)
-
-    threshold = render_config.get("large_number_threshold", 10000)
-
-    if value >= threshold:
-        if value >= 1_000_000:
-            return f"{value / 1_000_000:.1f}M"
-        elif value >= 1_000:
-            return f"{value / 1_000:.1f}k"
-
-    return str(value)
+# Sentinel value for unknown age
+UNKNOWN_AGE = 999999
 
 
-def format_age_days(days: int) -> str:
-    """Format age in days to actual date."""
+def format_number(value: Union[int, float], signed: bool = False) -> str:
+    """Format numbers with K/M/B abbreviation.
+    
+    Unified formatting function used throughout the application.
+    
+    Args:
+        value: Number to format
+        signed: If True, add + prefix for positive numbers
+        
+    Returns:
+        Formatted string with abbreviation (K/M/B) for large numbers
+    """
+    if not isinstance(value, (int, float)):
+        return "0"
+
+    # Handle negative numbers
+    is_negative = value < 0
+    abs_value = abs(value)
+
+    if abs_value >= 1_000_000_000:
+        formatted = f"{abs_value / 1_000_000_000:.1f}B"
+    elif abs_value >= 1_000_000:
+        formatted = f"{abs_value / 1_000_000:.1f}M"
+    elif abs_value >= 1_000:
+        formatted = f"{abs_value / 1_000:.1f}K"
+    else:
+        formatted = str(int(abs_value))
+
+    # Add sign
+    if is_negative:
+        formatted = f"-{formatted}"
+    elif signed and value > 0:
+        formatted = f"+{formatted}"
+
+    return formatted
+
+
+def format_age(days: Optional[int]) -> str:
+    """Format age in days to actual date.
+    
+    Unified age formatting function used throughout the application.
+    
+    Args:
+        days: Number of days ago (None or UNKNOWN_AGE for unknown)
+        
+    Returns:
+        Date string in YYYY-MM-DD format, or "Unknown" for sentinel values
+    """
     from datetime import datetime, timedelta
 
-    if days is None or days == 0:
+    # Handle unknown/sentinel values
+    if days is None or days == UNKNOWN_AGE:
+        return "Unknown"
+    
+    # Handle zero or negative (treat as today)
+    if days <= 0:
         return datetime.now().strftime("%Y-%m-%d")
 
     # Calculate actual date
@@ -6115,7 +6140,7 @@ class RepositoryReporter:
             }
 
 
-def determine_github_org(config: dict[str, Any], repos_path: Path) -> tuple[str, str]:
+def determine_github_org(repos_path: Path) -> tuple[str, str]:
     """Determine GitHub organization once - centralized function.
     
     Priority:
@@ -6123,7 +6148,6 @@ def determine_github_org(config: dict[str, Any], repos_path: Path) -> tuple[str,
     2. Auto-derive from repos_path hostname
     
     Args:
-        config: Configuration dictionary
         repos_path: Path to repositories directory
         
     Returns:
@@ -6131,11 +6155,19 @@ def determine_github_org(config: dict[str, Any], repos_path: Path) -> tuple[str,
         - "environment_variable" if from GITHUB_ORG env var (PROJECTS_JSON)
         - "auto_derived" if derived from hostname
         - "" if not found
+        
+    Note:
+        The config parameter was removed as it was unused.
+        GitHub org is now purely derived from environment or path.
     """
     # Check GITHUB_ORG environment variable (from PROJECTS_JSON matrix.github)
     github_org = os.environ.get("GITHUB_ORG", "")
     if github_org:
-        return github_org, "environment_variable"
+        # Basic validation: alphanumeric and hyphens only
+        if github_org and all(c.isalnum() or c == '-' for c in github_org):
+            return github_org, "environment_variable"
+        else:
+            logging.warning(f"Invalid GITHUB_ORG value '{github_org}' - must be alphanumeric with hyphens")
     
     # Auto-derive from repos_path hostname
     # Examples: ./gerrit.onap.org -> onap, ./git.opendaylight.org -> opendaylight
@@ -6287,8 +6319,8 @@ def write_config_to_step_summary(config: dict[str, Any], project: str) -> None:
                 f.write("- **Enabled:** ❌ No (disabled in configuration)\n\n")
                 
     except Exception as e:
-        # Silently fail - step summary is nice-to-have, not critical
-        pass
+        # Log but don't fail - step summary is nice-to-have, not critical
+        logging.debug(f"Could not write configuration to GITHUB_STEP_SUMMARY: {e}")
 
 
 def main() -> int:
@@ -6305,7 +6337,7 @@ def main() -> int:
             return 1
 
         # Determine GitHub organization once - centralized
-        github_org, github_org_source = determine_github_org(config, args.repos_path)
+        github_org, github_org_source = determine_github_org(args.repos_path)
         
         if github_org:
             # Store in config for all components to use
