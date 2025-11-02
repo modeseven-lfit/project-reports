@@ -302,171 +302,50 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
-      - name: "Publish report to gerrit-reports repository"
-        if: success()
-        env:
-          REPORTS_TOKEN: ${{ secrets.GERRIT_REPORTS_PAT_TOKEN }}
-          REPORTS_REPO: modeseven-lfit/gerrit-reports
-          PROJECT_NAME: ${{ matrix.project }}
-          PR_MODE: ${{ vars.REPORTS_PR_MODE || 'false' }}
-        shell: bash
-        # yamllint disable rule:line-length
-        run: |
-          set -euo pipefail
 
-          if [ -z "${REPORTS_TOKEN}" ]; then
-            echo "::error::GERRIT_REPORTS_PAT_TOKEN secret not set; cannot publish report."
-            echo "::error::This should be a fine-grained PAT with Contents: Read and write permissions for modeseven-lfit/gerrit-reports"
-            exit 1
-          fi
-
-          report_src="./reports/${PROJECT_NAME}/report.html"
-          if [ ! -f "${report_src}" ]; then
-            echo "::warning::No report.html found at ${report_src}; skipping publish."
-            exit 0
-          fi
-
-          slug=$(echo "${PROJECT_NAME}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//')
-          echo "Resolved project slug: ${slug}"
-
-          workdir="$(mktemp -d)"
-          cd "${workdir}"
-
-          echo "Cloning target repository"
-          git clone --depth 1 "https://${REPORTS_TOKEN}@github.com/${REPORTS_REPO}.git" repo
-          cd repo
-
-          target_dir="projects/${slug}"
-          mkdir -p "${target_dir}"
-          cp "${GITHUB_WORKSPACE}/${report_src}" "${target_dir}/report.html"
-
-          cat > "${target_dir}/.provenance.json" <<EOF
-          {
-            "project": "${PROJECT_NAME}",
-            "slug": "${slug}",
-            "source_run_id": "${GITHUB_RUN_ID}",
-            "source_run_attempt": "${GITHUB_RUN_ATTEMPT}",
-            "source_repo": "${GITHUB_REPOSITORY}",
-            "generated_at_utc": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          }
-          EOF
-
-          git config user.name "lf-releng-reports-bot"
-          git config user.email "lf-releng+reports-bot@linuxfoundation.org"
-
-          git add "${target_dir}/report.html" "${target_dir}/.provenance.json" || true
-
-          if git diff --cached --quiet; then
-            echo "No changes to commit for ${PROJECT_NAME}; skipping."
-            exit 0
-          fi
-
-          commit_msg="chore: update report for ${PROJECT_NAME} (run ${GITHUB_RUN_ID})"
-          echo "Committing: ${commit_msg}"
-          git commit -m "${commit_msg}"
-
-          if [ "${PR_MODE}" = "true" ]; then
-            echo "PR_MODE enabled; creating branch and pull request."
-            branch="update/${slug}/$(date -u +%Y%m%d%H%M%S)"
-            git checkout -b "${branch}"
-            git push origin "${branch}"
-
-            create_resp=$(curl -sS -X POST \
-              -H "Authorization: Bearer ${REPORTS_TOKEN}" \
-              -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/${REPORTS_REPO}/pulls" \
-              -d @- <<PRJSON
-          {
-            "title": "chore: update report for ${PROJECT_NAME}",
-            "head": "${branch}",
-            "base": "main",
-            "body": "Automated update of report for ${PROJECT_NAME} from run ${GITHUB_RUN_ID}.",
-            "maintainer_can_modify": true,
-            "draft": false
-          }
-          PRJSON
-            )
-
-            pr_number=$(echo "${create_resp}" | jq -r '.number // empty')
-
-            if [ -z "${pr_number}" ]; then
-              echo "::error::Failed to create pull request. Response:"
-              echo "${create_resp}"
-              exit 1
-            fi
-            echo "Created PR #${pr_number}"
-
-            merge_resp=$(curl -sS -X PUT \
-              -H "Authorization: Bearer ${REPORTS_TOKEN}" \
-              -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/${REPORTS_REPO}/pulls/${pr_number}/merge" \
-              -d '{"merge_method":"squash"}' || true)
-
-            merged=$(echo "${merge_resp}" | jq -r '.merged // false')
-            if [ "${merged}" = "true" ]; then
-              echo "Pull request #${pr_number} merged automatically."
-            else
-              echo "Pull request #${pr_number} not auto-merged (may require review or settings block)."
-            fi
-            exit 0
-          fi
-
-          echo "Direct push mode enabled; pushing to main with rebase/retry logic."
-          for attempt in {1..5}; do
-            echo "Attempt ${attempt}/5: Pulling latest changes..."
-            set +e
-            pull_output=$(git pull --rebase origin main 2>&1)
-            rc=$?
-            set -e
-            if [ $rc -ne 0 ]; then
-              echo "::warning::Rebase attempt ${attempt} failed with exit code ${rc}"
-              echo "Rebase output: ${pull_output}"
-              sleep $((attempt * 2))
-              continue
-            fi
-
-            echo "Attempt ${attempt}/5: Pushing changes..."
-            set +e
-            push_output=$(git push origin HEAD:main 2>&1)
-            push_rc=$?
-            set -e
-
-            if [ $push_rc -eq 0 ]; then
-              echo "✅ Report published successfully on attempt ${attempt}."
-              exit 0
-            else
-              echo "::warning::Push attempt ${attempt} failed with exit code ${push_rc}"
-              echo "Push output: ${push_output}"
-
-              # Check if it's an authentication issue
-              if echo "${push_output}" | grep -qi "authentication\|permission\|403\|401"; then
-                echo "::error::Authentication/permission error detected."
-                echo "::error::GERRIT_REPORTS_PAT_TOKEN must be a fine-grained PAT with:"
-                echo "::error::  - Repository access: modeseven-lfit/gerrit-reports"
-                echo "::error::  - Permissions: Contents (Read and write)"
-                exit 1
-              fi
-
-              sleep $((attempt * 2))
-            fi
-          done
-
-          echo "::error::Failed to push report after 5 attempts."
-          echo "::error::This may be due to:"
-          echo "::error::1. Multiple jobs pushing simultaneously (despite concurrency controls)"
-          echo "::error::2. PAT token lacking required permissions (needs Contents: Read and write for modeseven-lfit/gerrit-reports)"
-          echo "::error::3. Branch protection rules blocking direct pushes"
-          echo "::error::Consider setting REPORTS_PR_MODE variable to 'true' to use PR-based publishing instead."
-          exit 1
-        # yamllint enable rule:line-length
-
-  summary:
-    name: "Generate Summary Report"
+  publish:
+    name: "Publish Reports to gerrit-reports"
     needs: [verify, analyze]
     if: always()
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    timeout-minutes: 15
+    steps:
+      # Harden the runner used by this workflow
+      # yamllint disable-line rule:line-length
+      - uses: step-security/harden-runner@ec9f2d5744a09debf3a187a3f4f675c53b671911 # v2.13.0
+        with:
+          egress-policy: "audit"
+
+      - name: "Checkout repository"
+        # yamllint disable-line rule:line-length
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: "Download all report artifacts"
+        # yamllint disable-line rule:line-length
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          pattern: reports-*
+          path: ./downloaded-reports
+        continue-on-error: true
+
+      - name: "Publish all reports in batch"
+        env:
+          REPORTS_TOKEN: ${{ secrets.GERRIT_REPORTS_PAT_TOKEN }}
+          REPORTS_REPO: modeseven-lfit/gerrit-reports
+          ARTIFACTS_DIR: ./downloaded-reports
+        shell: bash
+        run: |
+          bash .github/scripts/publish-reports.sh
+  summary:
+    name: "Generate Summary Report"
+    needs: [verify, publish]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
     timeout-minutes: 10
     steps:
       # Harden the runner used by this workflow
@@ -513,3 +392,37 @@ jobs:
 
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "Job summary generated at run-time" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: "Trigger GitHub Pages update"
+        if: success()
+        env:
+          REPORTS_TOKEN: ${{ secrets.GERRIT_REPORTS_PAT_TOKEN }}
+          REPORTS_REPO: modeseven-lfit/gerrit-reports
+        shell: bash
+        run: |
+          if [ -z "${REPORTS_TOKEN}" ]; then
+            echo "::warning::GERRIT_REPORTS_PAT_TOKEN secret not set; cannot trigger pages workflow."
+            echo "Pages will need to be updated manually."
+            exit 0
+          fi
+
+          echo "Triggering GitHub Pages workflow in ${REPORTS_REPO}..."
+
+          if curl -sS -X POST \
+            -H "Authorization: Bearer ${REPORTS_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${REPORTS_REPO}/actions/workflows/pages.yaml/dispatches" \
+            -d '{"ref":"main"}'; then
+            echo "✅ Successfully triggered GitHub Pages workflow"
+            {
+              echo ""
+              echo "### 🌐 GitHub Pages Update"
+              echo "GitHub Pages workflow has been triggered to update the reports site."
+              echo "View the deployment at: https://github.com/${REPORTS_REPO}/actions/workflows/pages.yaml"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::error::Failed to trigger GitHub Pages workflow"
+            echo "::error::Ensure GERRIT_REPORTS_PAT_TOKEN has 'actions: write' permission for ${REPORTS_REPO}"
+            exit 1
+          fi
