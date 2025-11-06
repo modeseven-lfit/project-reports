@@ -1,17 +1,24 @@
+<!--
+SPDX-License-Identifier: Apache-2.0
+SPDX-FileCopyrightText: 2025 The Linux Foundation
+-->
+
 # Info-Master Repository Handling Fix
 
 ## Problem Summary
 
-After adding the INFO.yaml committer table feature in commit `ef41e90`, the GitHub Actions workflow was failing with the error:
+After adding the INFO.yaml committer table feature in commit `ef41e90`,
+the GitHub Actions workflow was failing with the error:
 
-```
+```text
 Info-Master Repository
 ❌ Clone failed: Local path not found or not a git repo
 ```
 
 ## Root Cause
 
-There was a mismatch between how the workflow and the Python script handled the info-master repository:
+There was a mismatch between how the workflow and the Python script
+handled the info-master repository:
 
 ### Previous Workflow (PR #18)
 
@@ -27,18 +34,22 @@ There was a mismatch between how the workflow and the Python script handled the 
 ### The Conflict
 
 1. **In CI/CD**: Workflow clones to `./info-master`
-2. **In Python script**: Configuration says to look for `testing/info-master`
-3. **Result**: Script can't find the repository → clone fails → no committer table
+2. **In Python script**: Configuration says to look for
+   `testing/info-master`
+3. **Result**: Script can't find the repository → clone fails → no
+   committer table
 
 ## Understanding the Context
 
-The `testing/info-master` directory in the local repository was a **reference clone** for development purposes. It was meant to:
+The `testing/info-master` directory in the local repository was a
+**reference clone** for development purposes. It was meant to:
 
 - Allow developers to see the structure of the info-master repository
 - Test INFO.yaml parsing locally without cloning each time
 - Understand what INFO.yaml files look like
 
-It was **NOT** meant to be used in the CI/CD pipeline.
+It was **NOT** meant to be used in the CI/CD pipeline. The local copy was
+only for development reference purposes.
 
 ## Solution Implemented
 
@@ -66,11 +77,12 @@ info_yaml:
   clone_url: "https://gerrit.linuxfoundation.org/infra/releng/info-master"
 ```
 
-**Change**: Commented out `local_path` since it's only for local development
+**Change**: Commented out `local_path` since it's only for local dev
 
 ### 2. Enhanced Python Script Logic (`generate_reports.py`)
 
-Updated `_clone_info_master_repo()` method to check multiple sources in priority order:
+Updated `_clone_info_master_repo()` method to check multiple sources in
+priority order:
 
 ```python
 def _clone_info_master_repo(self) -> Optional[Path]:
@@ -161,7 +173,7 @@ To verify the fix works:
 
 1. **CI/CD**: Run the workflow and check `GITHUB_STEP_SUMMARY` for:
 
-   ```
+   ```text
    ## Info-Master Repository
    ✅ Clone successful: /home/runner/work/.../info-master
    Clone method: true/false
@@ -187,9 +199,12 @@ To verify the fix works:
 
 ## Key Takeaways
 
-1. **Separation of Concerns**: Local dev tools (testing/) should not be referenced in production configs
-2. **Graceful Degradation**: Script now tries multiple methods before failing
-3. **Convention over Configuration**: Checking `./info-master` as a standard location reduces config needs
+1. **Separation of Concerns**: Local dev tools (testing/) should not be
+   referenced in production configs
+2. **Graceful Degradation**: Script now tries multiple methods before
+   failing
+3. **Convention over Configuration**: Checking `./info-master` as a
+   standard location reduces config needs
 4. **Better Logging**: Workflow summary now clearly shows info-master status
 5. **Backward Compatible**: Existing local dev setups still work with config override
 
@@ -198,10 +213,12 @@ To verify the fix works:
 - `configuration/template.config` - Configuration template
 - `generate_reports.py` - Main script with `_clone_info_master_repo()` method
 - `.github/workflows/reporting.yaml` - Workflow that clones info-master
-- `testing/info-master/` - Local reference clone (dev only, not used in CI)
+- `testing/info-master/` - Local reference clone (dev only, not used in
+  CI)
 
 ## Related Commits
 
-- **PR #18**: Added SSH authentication for info-master cloning in workflow
+- **PR #18**: Added SSH authentication for info-master cloning in
+  workflow
 - **Commit ef41e90**: Added INFO.yaml committer table feature
 - **This fix**: Makes info-master cloning work correctly in all environments

@@ -4,6 +4,7 @@
 testing/ONAP
 testing/reports
 testing/gerrit-clone.log
+testing/github_token
 
 # Gerrit server directories (server-specific naming)
 gerrit.*/

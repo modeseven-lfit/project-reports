@@ -141,7 +141,7 @@ for attempt in {1..3}; do
     exit 0
   fi
 
-  if [ $attempt -lt 3 ]; then
+  if [ "$attempt" -lt 3 ]; then
     echo "::warning::Push attempt ${attempt} failed; retrying..."
     sleep $((attempt * 2))
     git pull --rebase origin main || true

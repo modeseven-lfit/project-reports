@@ -2610,6 +2610,9 @@ class INFOYamlCollector:
         self.info_master_path: Optional[Path] = None
         self.projects_data: list[dict[str, Any]] = []
 
+        # URL validation cache to avoid repeated requests to the same URL
+        self.url_validation_cache: dict[str, tuple[bool, str]] = {}
+
         # Default time windows for committer activity coloring
         self.activity_windows = {
             "current": 365,  # Green - commits within last 365 days
@@ -2730,34 +2733,50 @@ class INFOYamlCollector:
     def validate_issue_tracker_url(self, url: str) -> tuple[bool, str]:
         """
         Validate that the issue tracker URL is accessible.
+        Uses caching to avoid repeated requests to the same URL.
 
         Returns (is_valid, error_message)
         """
         if not url:
             return (False, "No URL provided")
 
+        # Check cache first
+        if url in self.url_validation_cache:
+            self.logger.debug(f"URL validation cache hit for: {url}")
+            return self.url_validation_cache[url]
+
+        # Not in cache, perform validation
         try:
             # Use httpx to check URL (follows redirects)
             with httpx.Client(follow_redirects=True, timeout=10.0) as client:
                 response = client.head(url)
                 if response.status_code < 400:
-                    return (True, "")
+                    result = (True, "")
                 else:
-                    return (False, f"HTTP {response.status_code}")
+                    result = (False, f"HTTP {response.status_code}")
         except httpx.ConnectError:
-            return (False, "Connection failed")
+            result = (False, "Connection failed")
         except httpx.TimeoutException:
-            return (False, "Timeout")
+            result = (False, "Timeout")
         except Exception as e:
-            return (False, str(e))
+            result = (False, str(e))
+
+        # Cache the result
+        self.url_validation_cache[url] = result
+        return result
 
     def enrich_projects_with_git_data(
-        self, git_metrics: list[dict[str, Any]]
+        self, git_metrics: list[dict[str, Any]], current_gerrit_host: Optional[str] = None
     ) -> list[dict[str, Any]]:
         """
         Enrich INFO.yaml project data with git commit activity for committers.
 
         Matches projects to repositories and determines committer activity status.
+        Only includes projects from the current Gerrit server if specified.
+
+        Args:
+            git_metrics: List of repository metrics from git analysis
+            current_gerrit_host: If provided, only include projects from this Gerrit host
         """
         self.logger.info("Enriching INFO.yaml projects with git commit data...")
 
@@ -2769,9 +2788,22 @@ class INFOYamlCollector:
             if gerrit_project:
                 repo_lookup[gerrit_project] = metrics
 
+        # Filter projects by current Gerrit host if specified
+        projects_to_process = self.projects_data
+        if current_gerrit_host:
+            # Normalize the host name (e.g., "gerrit.onap.org")
+            projects_to_process = [
+                p for p in self.projects_data
+                if p.get("gerrit_server", "") == current_gerrit_host
+            ]
+            self.logger.info(
+                f"Filtered to {len(projects_to_process)} projects for {current_gerrit_host} "
+                f"(out of {len(self.projects_data)} total)"
+            )
+
         # Enrich each project
         enriched_projects = []
-        for project in self.projects_data:
+        for project in projects_to_process:
             enriched_project = project.copy()
 
             # Validate issue tracker URL
@@ -5490,13 +5522,13 @@ class ReportRenderer:
                 state_display = f"❓ {state}"
 
             lines.append(
-                f"| `{job_name}` | `{project_name}` | {state_display} | {score} |"
+                f"| {job_name} | {project_name} | {state_display} | {score} |"
             )
 
         lines.extend(
             [
                 "",
-                "**Recommendation:** Review these jobs and remove them if they are no longer needed, ",
+                "**Recommendation:** Review these jobs and remove them if they are no longer needed, "
                 "since their associated Gerrit projects are archived or read-only.",
                 "",
             ]
@@ -6364,13 +6396,41 @@ class RepositoryReporter:
             self.logger.info("Collecting INFO.yaml data from info-master repository...")
             info_yaml_projects = self.info_yaml_collector.collect_all_projects()
 
-            # Enrich with git commit activity data
+            # Determine current Gerrit host from config or repos_path
+            current_gerrit_host = None
+            gerrit_config = self.config.get("gerrit", {})
+            if gerrit_config.get("enabled", False):
+                current_gerrit_host = gerrit_config.get("host")
+
+            # If not in config, try to extract from repos_path
+            if not current_gerrit_host:
+                # Extract from path (e.g., "gerrit.onap.org" from "/path/to/gerrit.onap.org")
+                for part in repos_path_abs.parts:
+                    if "." in part and any(tld in part for tld in [".org", ".com", ".net", ".io"]):
+                        current_gerrit_host = part
+                        self.logger.info(f"Auto-detected Gerrit host from path: {current_gerrit_host}")
+                        break
+
+            # Enrich with git commit activity data, filtering by current Gerrit host
             self.enriched_info_yaml_projects = self.info_yaml_collector.enrich_projects_with_git_data(
-                repo_metrics
+                repo_metrics, current_gerrit_host
             )
-            self.logger.info(
-                f"Enriched {len(self.enriched_info_yaml_projects)} INFO.yaml projects with git data"
-            )
+
+            if current_gerrit_host:
+                self.logger.info(
+                    f"Enriched {len(self.enriched_info_yaml_projects)} INFO.yaml projects "
+                    f"from {current_gerrit_host} with git data"
+                )
+            else:
+                self.logger.info(
+                    f"Enriched {len(self.enriched_info_yaml_projects)} INFO.yaml projects with git data "
+                    f"(no Gerrit host filter applied)"
+                )
+
+            # Log cache statistics
+            cache_hits = len(self.info_yaml_collector.url_validation_cache)
+            if cache_hits > 0:
+                self.logger.info(f"URL validation cache: {cache_hits} unique URLs validated")
 
         # Log comprehensive Jenkins job allocation summary for auditing
         if (
@@ -6562,6 +6622,11 @@ class RepositoryReporter:
 
         # Concurrent processing
         results = []
+        total_repos = len(repo_dirs)
+        completed = 0
+
+        self.logger.info(f"Starting parallel analysis of {total_repos} repositories with {max_workers} workers")
+
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_repo = {
                 executor.submit(self._analyze_single_repository, repo_dir): repo_dir
@@ -6570,9 +6635,13 @@ class RepositoryReporter:
 
             for future in concurrent.futures.as_completed(future_to_repo):
                 repo_dir = future_to_repo[future]
+                completed += 1
                 try:
                     result = future.result()
                     results.append(result)
+                    # Log progress every 10 repos or at milestones
+                    if completed % 10 == 0 or completed in [1, 5, total_repos]:
+                        self.logger.info(f"Progress: {completed}/{total_repos} repositories analyzed ({completed*100//total_repos}%)")
                 except Exception as e:
                     self.logger.error(f"Failed to analyze {repo_dir.name}: {e}")
                     results.append(
@@ -6588,7 +6657,7 @@ class RepositoryReporter:
     def _analyze_single_repository(self, repo_path: Path) -> dict[str, Any]:
         """Analyze a single repository."""
         try:
-            self.logger.debug(f"Analyzing repository: {repo_path.name}")
+            self.logger.debug(f"Starting analysis of repository: {repo_path.name}")
 
             # Collect Git metrics
             repo_metrics = self.git_collector.collect_repo_git_metrics(repo_path)
@@ -6859,6 +6928,13 @@ def main() -> int:
 
         # Analyze repositories
         report_data = reporter.analyze_repositories(args.repos_path)
+
+        # Update renderer with INFO.yaml data if available
+        if reporter.enriched_info_yaml_projects:
+            reporter.renderer.info_yaml_projects = reporter.enriched_info_yaml_projects
+            logger.info(
+                f"Passing {len(reporter.enriched_info_yaml_projects)} INFO.yaml projects to renderer"
+            )
 
         # Generate outputs
         json_path = project_output_dir / "report_raw.json"

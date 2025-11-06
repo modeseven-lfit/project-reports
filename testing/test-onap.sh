@@ -47,6 +47,15 @@ log_error() {
 check_tokens() {
     log_info "Checking required GitHub tokens..."
 
+    # Try to source token from testing/github_token file if it exists
+    local token_file="$SCRIPT_DIR/github_token"
+    if [[ -f "$token_file" ]]; then
+        log_info "Found token file at $token_file"
+        # shellcheck source=/dev/null
+        source "$token_file"
+        log_success "Sourced tokens from $token_file"
+    fi
+
     local missing_tokens=false
 
     if [[ -z "${CLASSIC_READ_ONLY_PAT_TOKEN:-}" ]]; then
@@ -71,6 +80,11 @@ check_tokens() {
         echo
         echo "Please set the following environment variables before running this script:"
         echo
+        echo "Option 1: Create a token file (recommended for local development):"
+        echo "  echo 'export CLASSIC_READ_ONLY_PAT_TOKEN=\"your-token\"' > testing/github_token"
+        echo "  echo 'export GERRIT_REPORTS_PAT_TOKEN=\"your-token\"' >> testing/github_token"
+        echo
+        echo "Option 2: Set environment variables directly:"
         echo "  export CLASSIC_READ_ONLY_PAT_TOKEN='your-classic-pat-token'"
         echo "  export GERRIT_REPORTS_PAT_TOKEN='your-fine-grained-pat-token'"
         echo

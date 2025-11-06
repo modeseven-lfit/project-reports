@@ -51,9 +51,12 @@ jobs:
       - name: "Validate required secrets"
         shell: bash
         env:
-          CLASSIC_READ_ONLY_PAT_TOKEN: ${{ secrets.CLASSIC_READ_ONLY_PAT_TOKEN }}
-          GERRIT_REPORTS_PAT_TOKEN: ${{ secrets.GERRIT_REPORTS_PAT_TOKEN }}
-          LF_GERRIT_INFO_MASTER_SSH_KEY: ${{ secrets.LF_GERRIT_INFO_MASTER_SSH_KEY }}
+          CLASSIC_READ_ONLY_PAT_TOKEN: >-
+            ${{ secrets.CLASSIC_READ_ONLY_PAT_TOKEN }}
+          GERRIT_REPORTS_PAT_TOKEN: >-
+            ${{ secrets.GERRIT_REPORTS_PAT_TOKEN }}
+          LF_GERRIT_INFO_MASTER_SSH_KEY: >-
+            ${{ secrets.LF_GERRIT_INFO_MASTER_SSH_KEY }}
         run: |
           validation_failed=false
 
@@ -61,7 +64,7 @@ jobs:
 
           # Check CLASSIC_READ_ONLY_PAT_TOKEN
           if [ -z "$CLASSIC_READ_ONLY_PAT_TOKEN" ]; then
-            echo "::error::CLASSIC_READ_ONLY_PAT_TOKEN secret is not set or is empty"
+            echo "::error::CLASSIC_READ_ONLY_PAT_TOKEN secret is not set"
             echo "❌ CLASSIC_READ_ONLY_PAT_TOKEN: MISSING"
             validation_failed=true
           else
@@ -70,7 +73,7 @@ jobs:
 
           # Check GERRIT_REPORTS_PAT_TOKEN
           if [ -z "$GERRIT_REPORTS_PAT_TOKEN" ]; then
-            echo "::error::GERRIT_REPORTS_PAT_TOKEN secret is not set or is empty"
+            echo "::error::GERRIT_REPORTS_PAT_TOKEN secret is not set"
             echo "❌ GERRIT_REPORTS_PAT_TOKEN: MISSING"
             validation_failed=true
           else
@@ -79,8 +82,9 @@ jobs:
 
           # Check LF_GERRIT_INFO_MASTER_SSH_KEY
           if [ -z "$LF_GERRIT_INFO_MASTER_SSH_KEY" ]; then
-            echo "::warning::LF_GERRIT_INFO_MASTER_SSH_KEY secret is not set or is empty"
-            echo "⚠️  LF_GERRIT_INFO_MASTER_SSH_KEY: MISSING (will fall back to HTTPS)"
+            echo "::warning::LF_GERRIT_INFO_MASTER_SSH_KEY not set"
+            echo "⚠️  LF_GERRIT_INFO_MASTER_SSH_KEY: MISSING"
+            echo "   (will fall back to HTTPS)"
           else
             echo "✅ LF_GERRIT_INFO_MASTER_SSH_KEY: Present"
           fi
@@ -104,7 +108,8 @@ jobs:
             if [ -n "$LF_GERRIT_INFO_MASTER_SSH_KEY" ]; then
               echo "- ✅ **LF_GERRIT_INFO_MASTER_SSH_KEY:** Present"
             else
-              echo "- ⚠️ **LF_GERRIT_INFO_MASTER_SSH_KEY:** MISSING (HTTPS fallback will be used)"
+              echo "- ⚠️ **LF_GERRIT_INFO_MASTER_SSH_KEY:** MISSING"
+              echo "  (HTTPS fallback will be used)"
             fi
             echo ""
           } >> "$GITHUB_STEP_SUMMARY"
@@ -243,22 +248,26 @@ jobs:
         shell: bash
         # yamllint disable rule:line-length
         run: |
-          echo "🔗 Cloning info-master repository for additional context data"
+          echo "🔗 Cloning info-master repository for context data"
 
           # Try SSH first if available, fall back to HTTPS
           if [ "${SSH_AVAILABLE:-false}" = "true" ]; then
             echo "Attempting SSH clone..."
             if git clone "ssh://modesevenindustrialsolutions@gerrit.linuxfoundation.org:29418/releng/info-master" ./info-master; then
-              echo "✅ Info-master repository cloned successfully via SSH"
+              echo "✅ Info-master cloned successfully via SSH"
             else
-              echo "::warning::SSH clone failed, falling back to HTTPS"
-              git clone "https://gerrit.linuxfoundation.org/infra/releng/info-master" ./info-master
+              echo "::warning::SSH clone failed, using HTTPS"
+              git clone \
+                "https://gerrit.linuxfoundation.org/infra/releng/info-master" \
+                ./info-master
               echo "✅ Info-master repository cloned successfully via HTTPS"
             fi
           else
             echo "SSH not available, using HTTPS clone..."
-            git clone "https://gerrit.linuxfoundation.org/infra/releng/info-master" ./info-master
-            echo "✅ Info-master repository cloned successfully via HTTPS"
+            git clone \
+              "https://gerrit.linuxfoundation.org/infra/releng/info-master" \
+              ./info-master
+            echo "✅ Info-master cloned successfully via HTTPS"
           fi
 
           echo "📁 Sample files:"
@@ -274,7 +283,8 @@ jobs:
             if [ -d "./info-master/.git" ]; then
               echo "✅ Clone successful: $(pwd)/info-master"
               echo ""
-              echo "Clone method: ${SSH_AVAILABLE:-false}"
+              ssh_status="${SSH_AVAILABLE:-false}"
+              echo "Clone method: ${ssh_status}"
               echo ""
               yaml_count=$(find ./info-master -name "INFO.yaml" | wc -l)
               echo "📊 Found ${yaml_count} INFO.yaml files"
@@ -488,28 +498,36 @@ jobs:
         shell: bash
         run: |
           if [ -z "${REPORTS_TOKEN}" ]; then
-            echo "::warning::GERRIT_REPORTS_PAT_TOKEN secret not set; cannot trigger pages workflow."
+            echo "::warning::GERRIT_REPORTS_PAT_TOKEN not set"
+            echo "Cannot trigger pages workflow."
             echo "Pages will need to be updated manually."
             exit 0
           fi
 
           echo "Triggering GitHub Pages workflow in ${REPORTS_REPO}..."
 
+          repo_api="https://api.github.com/repos/${REPORTS_REPO}"
+          workflow_api="${repo_api}/actions/workflows/pages.yaml"
+          workflow_url="${workflow_api}/dispatches"
+
           if curl -sS -X POST \
             -H "Authorization: Bearer ${REPORTS_TOKEN}" \
             -H "Accept: application/vnd.github+json" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/repos/${REPORTS_REPO}/actions/workflows/pages.yaml/dispatches" \
+            "${workflow_url}" \
             -d '{"ref":"main"}'; then
             echo "✅ Successfully triggered GitHub Pages workflow"
+            pages_url="https://github.com/${REPORTS_REPO}"
+            pages_url="${pages_url}/actions/workflows/pages.yaml"
             {
               echo ""
               echo "### 🌐 GitHub Pages Update"
-              echo "GitHub Pages workflow has been triggered to update the reports site."
-              echo "View the deployment at: https://github.com/${REPORTS_REPO}/actions/workflows/pages.yaml"
+              echo "GitHub Pages workflow triggered to update reports."
+              echo "View deployment at: ${pages_url}"
             } >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "::error::Failed to trigger GitHub Pages workflow"
-            echo "::error::Ensure GERRIT_REPORTS_PAT_TOKEN has 'actions: write' permission for ${REPORTS_REPO}"
+            echo "::error::Failed to trigger GitHub Pages"
+            echo "::error::Ensure GERRIT_REPORTS_PAT_TOKEN has"
+            echo "::error::'actions: write' permission for ${REPORTS_REPO}"
             exit 1
           fi
