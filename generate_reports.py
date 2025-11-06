@@ -2788,6 +2788,12 @@ class INFOYamlCollector:
             if gerrit_project:
                 repo_lookup[gerrit_project] = metrics
 
+        self.logger.debug(f"Built repo_lookup with {len(repo_lookup)} repositories")
+        if len(repo_lookup) > 0:
+            # Show first few keys as examples
+            sample_keys = list(repo_lookup.keys())[:5]
+            self.logger.debug(f"Sample repo_lookup keys: {sample_keys}")
+
         # Filter projects by current Gerrit host if specified
         projects_to_process = self.projects_data
         if current_gerrit_host:
@@ -2803,6 +2809,9 @@ class INFOYamlCollector:
 
         # Enrich each project
         enriched_projects = []
+        matched_count = 0
+        unmatched_count = 0
+
         for project in projects_to_process:
             enriched_project = project.copy()
 
@@ -2817,27 +2826,46 @@ class INFOYamlCollector:
                 enriched_project["issue_tracker_valid"] = False
                 enriched_project["issue_tracker_error"] = "No URL"
 
-            # Try to find matching repository
+            # Try to find matching repository/repositories
+            project_name = project.get("project_name", "")
             project_path = project.get("project_path", "")
-            matched_repo = None
+            matched_repos = []
 
-            # Try exact match first
+            # Try exact match first (for single-repo projects)
             if project_path in repo_lookup:
-                matched_repo = repo_lookup[project_path]
-            else:
-                # Try matching against repository names in the project's repositories list
-                for repo_name in project.get("repositories", []):
-                    if repo_name in repo_lookup:
-                        matched_repo = repo_lookup[repo_name]
-                        break
+                matched_repos.append(repo_lookup[project_path])
+                self.logger.debug(f"Matched project '{project_name}' via project_path '{project_path}'")
 
-            # Enrich committers with activity data
-            if matched_repo:
+            # Also try matching against repository names in the project's repositories list
+            # This handles umbrella projects with multiple repos
+            for repo_name in project.get("repositories", []):
+                if repo_name in repo_lookup:
+                    matched_repos.append(repo_lookup[repo_name])
+                    self.logger.debug(f"Matched project '{project_name}' via repository '{repo_name}'")
+
+            # Aggregate authors data from all matched repositories
+            if matched_repos:
+                # Merge author data from all matched repositories
+                aggregated_authors = {}
+                for repo_metrics in matched_repos:
+                    # Authors are at the top level of repo_metrics, not nested under repository
+                    repo_authors = repo_metrics.get("authors", {})
+                    for email, author_data in repo_authors.items():
+                        if email not in aggregated_authors:
+                            aggregated_authors[email] = author_data.copy()
+                        else:
+                            # Update with most recent activity
+                            existing_days = aggregated_authors[email].get("days_since_last_commit")
+                            new_days = author_data.get("days_since_last_commit")
+                            if new_days is not None and (existing_days is None or new_days < existing_days):
+                                aggregated_authors[email] = author_data.copy()
+
                 enriched_project["committers"] = self._enrich_committers_activity(
                     project.get("committers", []),
-                    matched_repo.get("authors", {}),
+                    aggregated_authors,
                 )
                 enriched_project["has_git_data"] = True
+                matched_count += 1
             else:
                 # No git data found - mark committers as unknown activity
                 enriched_project["committers"] = [
@@ -2845,8 +2873,20 @@ class INFOYamlCollector:
                     for c in project.get("committers", [])
                 ]
                 enriched_project["has_git_data"] = False
+                unmatched_count += 1
+                if unmatched_count <= 5:  # Log first 5 unmatched projects for debugging
+                    self.logger.debug(
+                        f"No match for project '{project_name}': "
+                        f"project_path='{project_path}', "
+                        f"repositories={project.get('repositories', [])[:3]}"
+                    )
 
             enriched_projects.append(enriched_project)
+
+        self.logger.info(
+            f"Repository matching: {matched_count} matched, {unmatched_count} unmatched "
+            f"(out of {len(projects_to_process)} projects)"
+        )
 
         return enriched_projects
 
