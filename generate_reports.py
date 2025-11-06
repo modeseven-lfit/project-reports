@@ -2625,6 +2625,10 @@ class INFOYamlCollector:
         if "activity_windows" in info_config:
             self.activity_windows.update(info_config["activity_windows"])
 
+        # URL validation settings
+        self.url_timeout = info_config.get("url_timeout", 15.0)
+        self.url_retries = info_config.get("url_retries", 3)
+
     def set_info_master_path(self, path: Path) -> None:
         """Set the path to the cloned info-master repository."""
         self.info_master_path = path
@@ -2734,9 +2738,12 @@ class INFOYamlCollector:
         """
         Validate that the issue tracker URL is accessible.
         Uses caching to avoid repeated requests to the same URL.
+        Retries up to 3 times with exponential backoff for transient failures.
 
         Returns (is_valid, error_message)
         """
+        import time
+
         if not url:
             return (False, "No URL provided")
 
@@ -2745,21 +2752,48 @@ class INFOYamlCollector:
             self.logger.debug(f"URL validation cache hit for: {url}")
             return self.url_validation_cache[url]
 
-        # Not in cache, perform validation
-        try:
-            # Use httpx to check URL (follows redirects)
-            with httpx.Client(follow_redirects=True, timeout=10.0) as client:
-                response = client.head(url)
-                if response.status_code < 400:
-                    result = (True, "")
-                else:
-                    result = (False, f"HTTP {response.status_code}")
-        except httpx.ConnectError:
-            result = (False, "Connection failed")
-        except httpx.TimeoutException:
-            result = (False, "Timeout")
-        except Exception as e:
-            result = (False, str(e))
+        # Not in cache, perform validation with retries
+        result = None
+        last_error = None
+
+        for attempt in range(self.url_retries):
+            try:
+                # Use httpx to check URL (follows redirects)
+                with httpx.Client(follow_redirects=True, timeout=self.url_timeout) as client:
+                    response = client.head(url)
+                    if response.status_code < 400:
+                        result = (True, "")
+                        break
+                    else:
+                        result = (False, f"HTTP {response.status_code}")
+                        break  # Don't retry HTTP errors
+            except httpx.ConnectError as e:
+                last_error = f"Connection failed"
+                if attempt < self.url_retries - 1:
+                    retry_delay = 1.0 * (2 ** attempt)  # Exponential backoff: 1s, 2s, 4s
+                    self.logger.debug(
+                        f"URL validation attempt {attempt + 1}/{self.url_retries} failed for {url}, "
+                        f"retrying in {retry_delay}s..."
+                    )
+                    time.sleep(retry_delay)
+                    continue
+            except httpx.TimeoutException as e:
+                last_error = f"Timeout after {self.url_timeout}s"
+                if attempt < self.url_retries - 1:
+                    retry_delay = 1.0 * (2 ** attempt)
+                    self.logger.debug(
+                        f"URL validation attempt {attempt + 1}/{self.url_retries} timed out for {url}, "
+                        f"retrying in {retry_delay}s..."
+                    )
+                    time.sleep(retry_delay)
+                    continue
+            except Exception as e:
+                last_error = str(e)
+                break  # Don't retry unexpected errors
+
+        # If we got here without a result, use the last error
+        if result is None:
+            result = (False, f"{last_error} (after {self.url_retries} attempts)")
 
         # Cache the result
         self.url_validation_cache[url] = result
@@ -5156,37 +5190,17 @@ class ReportRenderer:
         )
         lines.append("")
 
-        # Sort projects by gerrit server, then by project name
+        # Sort projects by project name only
         sorted_projects = sorted(
             self.info_yaml_projects,
-            key=lambda p: (p.get("gerrit_server", ""), p.get("project_name", ""))
+            key=lambda p: p.get("project_name", "")
         )
 
-        # Group by gerrit server
-        current_server = None
-        table_started = False
+        # Start table with header
+        lines.append("| Project | Creation Date | Lifecycle State | Project Lead | Committers |")
+        lines.append("|---------|---------------|-----------------|--------------|------------|")
 
         for project in sorted_projects:
-            gerrit_server = project.get("gerrit_server", "unknown")
-
-            # Add server header if changed
-            if gerrit_server != current_server:
-                # Close previous table if exists
-                if table_started:
-                    lines.append("")
-                    table_started = False
-
-                if current_server is not None:
-                    lines.append("")
-
-                lines.append(f"### {gerrit_server}")
-                lines.append("")
-                current_server = gerrit_server
-
-                # Start new table with header
-                lines.append("| Project | Creation Date | Lifecycle State | Project Lead | Committers |")
-                lines.append("|---------|---------------|-----------------|--------------|------------|")
-                table_started = True
 
             # Prepare project name with optional issue tracker link
             project_name = project.get("project_name", "Unknown")
@@ -5214,11 +5228,37 @@ class ReportRenderer:
             project_lead = project.get("project_lead", {})
             lead_name = project_lead.get("name", "Unknown")
 
-            # Build committers list with activity coloring
+            # Get activity color/status for project lead from committers list
+            lead_color = "gray"
+            lead_status = "unknown"
             committers = project.get("committers", [])
+
+            # Find the project lead in the committers list to get their color
+            for committer in committers:
+                if committer.get("name") == lead_name:
+                    lead_color = committer.get("activity_color", "gray")
+                    lead_status = committer.get("activity_status", "unknown")
+                    break
+
+            # Create color-coded project lead name
+            if lead_color == "green":
+                lead_name_display = f'<span style="color: green;" title="✅ Current - commits within last 365 days">{lead_name}</span>'
+            elif lead_color == "orange":
+                lead_name_display = f'<span style="color: orange;" title="☑️ Active - commits between 365-1095 days">{lead_name}</span>'
+            elif lead_color == "red":
+                lead_name_display = f'<span style="color: red;" title="🛑 Inactive - no commits in 1095+ days">{lead_name}</span>'
+            else:
+                lead_name_display = f'<span style="color: gray;" title="Unknown activity status">{lead_name}</span>'
+
+            # Build committers list with activity coloring, excluding the project lead
             committers_html = []
             for committer in committers:
                 name = committer.get("name", "Unknown")
+
+                # Skip the project lead to avoid duplication
+                if name == lead_name:
+                    continue
+
                 color = committer.get("activity_color", "gray")
                 status = committer.get("activity_status", "unknown")
 
@@ -5239,7 +5279,7 @@ class ReportRenderer:
             # Add table row
             lines.append(
                 f"| {project_name_display} | {creation_date} | {lifecycle_state} | "
-                f"{lead_name} | {committers_display} |"
+                f"{lead_name_display} | {committers_display} |"
             )
 
         lines.append("")
@@ -5914,6 +5954,7 @@ class ReportRenderer:
                     is_cicd_jobs = False
                     is_all_repositories = False
                     is_global_summary = False
+                    is_lifecycle_summary = False
                     if has_headers and i < len(lines):
                         table_header = line.lower()
                         if (
@@ -5939,6 +5980,12 @@ class ReportRenderer:
                             and "percentage" in table_header
                         ):
                             is_global_summary = True
+                        elif (
+                            "lifecycle state" in table_header
+                            and "gerrit project count" in table_header
+                            and "percentage" in table_header
+                        ):
+                            is_lifecycle_summary = True
 
                     table_class = (
                         ' class="sortable"'
@@ -5955,6 +6002,8 @@ class ReportRenderer:
                         table_class = ' class="sortable"'
                     elif is_global_summary:
                         table_class = ' class="no-search no-pagination"'
+                    elif is_lifecycle_summary:
+                        table_class = ' class="sortable no-search no-pagination"'
 
                     html_lines.append(f"<table{table_class}>")
                     in_table = True
