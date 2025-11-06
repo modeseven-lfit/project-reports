@@ -6202,8 +6202,23 @@ class RepositoryReporter:
         Returns the path to the cloned repository in a temporary directory,
         or None if cloning failed.
 
-        If info_yaml.local_path is configured, uses that instead of cloning.
+        Priority order:
+        1. Environment variable INFO_MASTER_PATH
+        2. Config setting info_yaml.local_path
+        3. Check for ./info-master (created by CI workflow)
+        4. Clone to temporary directory
         """
+        # Check if environment variable is set (highest priority)
+        env_path = os.environ.get("INFO_MASTER_PATH")
+        if env_path:
+            info_master_path = Path(env_path)
+            if info_master_path.exists() and (info_master_path / ".git").exists():
+                self.logger.info(f"Using info-master from environment variable: {info_master_path}")
+                api_stats.record_info_master(True)
+                return info_master_path
+            else:
+                self.logger.warning(f"INFO_MASTER_PATH set but path invalid: {env_path}")
+
         # Check if local path is configured
         info_config = self.config.get("info_yaml", {})
         local_path = info_config.get("local_path")
@@ -6212,14 +6227,22 @@ class RepositoryReporter:
             # Use existing local path instead of cloning
             info_master_path = Path(local_path)
             if info_master_path.exists() and (info_master_path / ".git").exists():
-                self.logger.info(f"Using existing info-master repository at: {info_master_path}")
+                self.logger.info(f"Using configured info-master repository at: {info_master_path}")
                 api_stats.record_info_master(True)
                 # Don't set temp_dir since we're not managing this directory
                 return info_master_path
             else:
-                self.logger.error(f"Configured info-master path does not exist or is not a git repository: {local_path}")
-                api_stats.record_info_master(False, "Local path not found or not a git repo")
-                return None
+                self.logger.warning(f"Configured info-master path does not exist or is not a git repository: {local_path}")
+
+        # Check for ./info-master (commonly created by CI workflow)
+        workflow_info_master = Path("./info-master")
+        if workflow_info_master.exists() and (workflow_info_master / ".git").exists():
+            self.logger.info(f"Using workflow-cloned info-master repository at: {workflow_info_master}")
+            api_stats.record_info_master(True)
+            return workflow_info_master.resolve()
+
+        # If no existing path found, clone to temporary directory
+        self.logger.info("No existing info-master found, cloning to temporary directory")
 
         # Create a temporary directory for info-master
         self.info_master_temp_dir = tempfile.mkdtemp(prefix="info-master-")

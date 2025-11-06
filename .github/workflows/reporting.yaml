@@ -56,9 +56,9 @@ jobs:
           LF_GERRIT_INFO_MASTER_SSH_KEY: ${{ secrets.LF_GERRIT_INFO_MASTER_SSH_KEY }}
         run: |
           validation_failed=false
-          
+
           echo "🔐 Validating required secrets..."
-          
+
           # Check CLASSIC_READ_ONLY_PAT_TOKEN
           if [ -z "$CLASSIC_READ_ONLY_PAT_TOKEN" ]; then
             echo "::error::CLASSIC_READ_ONLY_PAT_TOKEN secret is not set or is empty"
@@ -67,7 +67,7 @@ jobs:
           else
             echo "✅ CLASSIC_READ_ONLY_PAT_TOKEN: Present"
           fi
-          
+
           # Check GERRIT_REPORTS_PAT_TOKEN
           if [ -z "$GERRIT_REPORTS_PAT_TOKEN" ]; then
             echo "::error::GERRIT_REPORTS_PAT_TOKEN secret is not set or is empty"
@@ -76,7 +76,7 @@ jobs:
           else
             echo "✅ GERRIT_REPORTS_PAT_TOKEN: Present"
           fi
-          
+
           # Check LF_GERRIT_INFO_MASTER_SSH_KEY
           if [ -z "$LF_GERRIT_INFO_MASTER_SSH_KEY" ]; then
             echo "::warning::LF_GERRIT_INFO_MASTER_SSH_KEY secret is not set or is empty"
@@ -84,7 +84,7 @@ jobs:
           else
             echo "✅ LF_GERRIT_INFO_MASTER_SSH_KEY: Present"
           fi
-          
+
           # Write summary
           {
             echo "## 🔐 Secrets Validation"
@@ -94,13 +94,13 @@ jobs:
             else
               echo "- ❌ **CLASSIC_READ_ONLY_PAT_TOKEN:** MISSING"
             fi
-            
+
             if [ -n "$GERRIT_REPORTS_PAT_TOKEN" ]; then
               echo "- ✅ **GERRIT_REPORTS_PAT_TOKEN:** Present"
             else
               echo "- ❌ **GERRIT_REPORTS_PAT_TOKEN:** MISSING"
             fi
-            
+
             if [ -n "$LF_GERRIT_INFO_MASTER_SSH_KEY" ]; then
               echo "- ✅ **LF_GERRIT_INFO_MASTER_SSH_KEY:** Present"
             else
@@ -108,12 +108,12 @@ jobs:
             fi
             echo ""
           } >> "$GITHUB_STEP_SUMMARY"
-          
+
           if [ "$validation_failed" = true ]; then
             echo "::error::Secret validation failed - missing required secrets"
             exit 1
           fi
-          
+
           echo "✅ All required secrets are present"
 
       - name: "Parse and validate PROJECTS_JSON"
@@ -265,6 +265,23 @@ jobs:
           find ./info-master -maxdepth 1 -name "*.yaml" | head -3
           echo "📂 Sample directories:"
           find ./info-master -maxdepth 1 -type d -name "gerrit.*" | head -3
+
+          # Add info-master status to workflow summary
+          {
+            echo ""
+            echo "## Info-Master Repository"
+            echo ""
+            if [ -d "./info-master/.git" ]; then
+              echo "✅ Clone successful: $(pwd)/info-master"
+              echo ""
+              echo "Clone method: ${SSH_AVAILABLE:-false}"
+              echo ""
+              yaml_count=$(find ./info-master -name "INFO.yaml" | wc -l)
+              echo "📊 Found ${yaml_count} INFO.yaml files"
+            else
+              echo "❌ Clone failed: Local path not found or not a git repo"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
         # yamllint enable rule:line-length
 
       - name: "Set up Python environment for ${{ matrix.project }}"

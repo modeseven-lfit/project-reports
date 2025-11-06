@@ -37,8 +37,19 @@ gh variable set PROJECTS_JSON --body '[
 |--------|-----------|---------|
 | `CLASSIC_READ_ONLY_PAT_TOKEN` | ✅ Yes | GitHub API access for workflow status |
 | `GERRIT_REPORTS_PAT_TOKEN` | ✅ Yes | Publishing reports to gerrit-reports repo |
-| `LF_GERRIT_INFO_MASTER_SSH_KEY` | ⚠️ Optional | SSH access to info-master (HTTPS fallback available) |
+| `LF_GERRIT_INFO_MASTER_SSH_KEY` | ⚠️ Optional | SSH access to info-master for INFO.yaml committer reports (HTTPS fallback available) |
 <!-- markdownlint-enable MD013 -->
+
+## Info-Master Repository
+
+The workflow clones the `info-master` repository to generate committer tables from INFO.yaml files:
+
+- **In CI/CD**: Cloned to `./info-master` by the workflow
+- **Locally**: Can use `testing/info-master` reference clone (set in config)
+- **SSH Key**: Optional - uses HTTPS fallback if not configured
+- **Priority**: Environment var → Config → `./info-master` → Clone to temp
+
+The Python script automatically detects `./info-master` created by the workflow, so no additional configuration is needed for CI/CD environments.
 
 ## Auto-Detection
 
