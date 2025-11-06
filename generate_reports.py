@@ -2845,26 +2845,22 @@ class INFOYamlCollector:
 
             # Aggregate authors data from all matched repositories
             if matched_repos:
-                # Merge author data from all matched repositories
-                aggregated_authors = {}
+                # Find the most recent activity across all matched repositories
+                most_recent_days = None
                 for repo_metrics in matched_repos:
-                    # Authors are at the top level of repo_metrics, not nested under repository
-                    repo_authors = repo_metrics.get("authors", {})
-                    for email, author_data in repo_authors.items():
-                        if email not in aggregated_authors:
-                            aggregated_authors[email] = author_data.copy()
-                        else:
-                            # Update with most recent activity
-                            existing_days = aggregated_authors[email].get("days_since_last_commit")
-                            new_days = author_data.get("days_since_last_commit")
-                            if new_days is not None and (existing_days is None or new_days < existing_days):
-                                aggregated_authors[email] = author_data.copy()
+                    repo_info = repo_metrics.get("repository", {})
+                    repo_days = repo_info.get("days_since_last_commit")
+                    if repo_days is not None:
+                        if most_recent_days is None or repo_days < most_recent_days:
+                            most_recent_days = repo_days
 
-                enriched_project["committers"] = self._enrich_committers_activity(
+                # Color all committers based on project's most recent activity
+                enriched_project["committers"] = self._enrich_committers_with_project_activity(
                     project.get("committers", []),
-                    aggregated_authors,
+                    most_recent_days,
                 )
                 enriched_project["has_git_data"] = True
+                enriched_project["project_days_since_last_commit"] = most_recent_days
                 matched_count += 1
             else:
                 # No git data found - mark committers as unknown activity
@@ -2890,55 +2886,41 @@ class INFOYamlCollector:
 
         return enriched_projects
 
-    def _enrich_committers_activity(
+    def _enrich_committers_with_project_activity(
         self,
         committers: list[dict[str, str]],
-        authors_data: dict[str, Any],
+        project_days_since_last_commit: Optional[int],
     ) -> list[dict[str, Any]]:
         """
-        Determine activity status for each committer based on git commit data.
+        Determine activity status for all committers based on project's most recent activity.
+
+        This colors all committers of a project the same color based on when the project
+        was last active, rather than tracking individual committer activity.
 
         Returns committers list with added 'activity_status' and 'activity_color'.
         """
         enriched = []
 
+        # Determine status and color based on project activity
+        if project_days_since_last_commit is not None:
+            current_window = self.activity_windows["current"]
+            active_window = self.activity_windows["active"]
+            if current_window is not None and project_days_since_last_commit <= current_window:
+                status = "current"
+                color = "green"
+            elif active_window is not None and project_days_since_last_commit <= active_window:
+                status = "active"
+                color = "orange"
+            else:
+                status = "inactive"
+                color = "red"
+        else:
+            status = "unknown"
+            color = "gray"
+
+        # Apply the same status and color to all committers
         for committer in committers:
             enriched_committer = committer.copy()
-            email = committer.get("email", "").lower()
-            name = committer.get("name", "")
-
-            # Try to find author by email or name
-            author_metrics = None
-            if email and email in authors_data:
-                author_metrics = authors_data[email]
-            else:
-                # Fallback: try to match by name (less reliable)
-                for author_email, metrics in authors_data.items():
-                    if metrics.get("name", "").lower() == name.lower():
-                        author_metrics = metrics
-                        break
-
-            if author_metrics:
-                # Determine activity based on last commit
-                last_commit_days = author_metrics.get("days_since_last_commit")
-
-                if last_commit_days is not None:
-                    if last_commit_days <= self.activity_windows["current"]:
-                        status = "current"
-                        color = "green"
-                    elif last_commit_days <= self.activity_windows["active"]:
-                        status = "active"
-                        color = "orange"
-                    else:
-                        status = "inactive"
-                        color = "red"
-                else:
-                    status = "unknown"
-                    color = "gray"
-            else:
-                status = "unknown"
-                color = "gray"
-
             enriched_committer["activity_status"] = status
             enriched_committer["activity_color"] = color
             enriched.append(enriched_committer)
@@ -5261,7 +5243,38 @@ class ReportRenderer:
             )
 
         lines.append("")
-        lines.append(f"**Total Projects:** {len(self.info_yaml_projects)}")
+
+        # Add lifecycle state summary table
+        lines.append("### Lifecycle State Summary")
+        lines.append("")
+
+        # Count projects by lifecycle state
+        lifecycle_counts: dict[str, int] = {}
+        total_projects = len(self.info_yaml_projects)
+
+        for project in self.info_yaml_projects:
+            lifecycle_state = project.get("lifecycle_state", "Unknown")
+            lifecycle_counts[lifecycle_state] = lifecycle_counts.get(lifecycle_state, 0) + 1
+
+        # Sort by count (descending) then by name
+        sorted_states = sorted(
+            lifecycle_counts.items(),
+            key=lambda x: (-x[1], x[0])
+        )
+
+        # Generate summary table
+        lines.append("| Lifecycle State | Gerrit Project Count | Percentage |")
+        lines.append("|----------------|---------------------|------------|")
+
+        for state, count in sorted_states:
+            if total_projects > 0:
+                percentage = (count / total_projects) * 100
+                lines.append(f"| {state} | {count} | {percentage:.1f}% |")
+            else:
+                lines.append(f"| {state} | {count} | 0.0% |")
+
+        lines.append("")
+        lines.append(f"**Total Projects:** {total_projects}")
         return "\n".join(lines)
 
     def _generate_contributors_section(self, data: dict[str, Any]) -> str:
