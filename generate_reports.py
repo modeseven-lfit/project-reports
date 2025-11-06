@@ -2603,12 +2603,14 @@ class INFOYamlCollector:
         config: dict[str, Any],
         time_windows: dict[str, dict[str, Any]],
         logger: logging.Logger,
+        gerrit_projects_cache: Optional[dict[str, dict[str, Any]]] = None,
     ) -> None:
         self.config = config
         self.time_windows = time_windows
         self.logger = logger
         self.info_master_path: Optional[Path] = None
         self.projects_data: list[dict[str, Any]] = []
+        self.gerrit_projects_cache = gerrit_projects_cache or {}
 
         # URL validation cache to avoid repeated requests to the same URL
         self.url_validation_cache: dict[str, tuple[bool, str]] = {}
@@ -2628,6 +2630,9 @@ class INFOYamlCollector:
         # URL validation settings
         self.url_timeout = info_config.get("url_timeout", 15.0)
         self.url_retries = info_config.get("url_retries", 3)
+
+        # Archived project filtering
+        self.exclude_archived = info_config.get("exclude_archived", True)
 
     def set_info_master_path(self, path: Path) -> None:
         """Set the path to the cloned info-master repository."""
@@ -2807,6 +2812,7 @@ class INFOYamlCollector:
 
         Matches projects to repositories and determines committer activity status.
         Only includes projects from the current Gerrit server if specified.
+        Optionally filters out archived/read-only projects based on Gerrit state.
 
         Args:
             git_metrics: List of repository metrics from git analysis
@@ -2840,6 +2846,36 @@ class INFOYamlCollector:
                 f"Filtered to {len(projects_to_process)} projects for {current_gerrit_host} "
                 f"(out of {len(self.projects_data)} total)"
             )
+
+        # Filter out archived/read-only projects if configured
+        if self.exclude_archived and self.gerrit_projects_cache:
+            initial_count = len(projects_to_process)
+            filtered_projects = []
+            excluded_count = 0
+
+            for project in projects_to_process:
+                project_path = project.get("project_path", "")
+
+                # Check Gerrit state for this project
+                if project_path in self.gerrit_projects_cache:
+                    gerrit_state = self.gerrit_projects_cache[project_path].get("state", "ACTIVE")
+                    if gerrit_state in ["READ_ONLY", "HIDDEN"]:
+                        excluded_count += 1
+                        self.logger.debug(
+                            f"Excluding archived project '{project.get('project_name', project_path)}' "
+                            f"(Gerrit state: {gerrit_state})"
+                        )
+                        continue
+
+                filtered_projects.append(project)
+
+            projects_to_process = filtered_projects
+
+            if excluded_count > 0:
+                self.logger.info(
+                    f"Excluded {excluded_count} archived/read-only projects "
+                    f"({len(projects_to_process)} remaining out of {initial_count})"
+                )
 
         # Enrich each project
         enriched_projects = []
@@ -6452,11 +6488,12 @@ class RepositoryReporter:
         info_master_path = self._clone_info_master_repo()
         if info_master_path:
             self.logger.info(f"Info-master repository available at: {info_master_path}")
-            # Initialize INFO.yaml collector
+            # Initialize INFO.yaml collector with Gerrit projects cache
             self.info_yaml_collector = INFOYamlCollector(
                 self.config,
                 cast(dict[str, dict[str, Any]], report_data["time_windows"]),
-                self.logger
+                self.logger,
+                self.git_collector.gerrit_projects_cache
             )
             self.info_yaml_collector.set_info_master_path(info_master_path)
         else:
