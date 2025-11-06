@@ -1,8 +1,14 @@
+<!--
+SPDX-License-Identifier: Apache-2.0
+SPDX-FileCopyrightText: 2025 The Linux Foundation
+-->
+
 # Quick Reference: GitHub API Configuration
 
 ## TL;DR
 
 ### Minimal Setup
+
 ```bash
 # 1. Set required secret
 gh secret set CLASSIC_READ_ONLY_PAT_TOKEN
@@ -11,6 +17,7 @@ gh secret set CLASSIC_READ_ONLY_PAT_TOKEN
 ```
 
 ### With Explicit GitHub Org Mapping
+
 ```bash
 # Update PROJECTS_JSON with github field
 gh variable set PROJECTS_JSON --body '[
@@ -25,16 +32,19 @@ gh variable set PROJECTS_JSON --body '[
 
 ## Required Secrets
 
+<!-- markdownlint-disable MD013 -->
 | Secret | Required? | Purpose |
 |--------|-----------|---------|
 | `CLASSIC_READ_ONLY_PAT_TOKEN` | ✅ Yes | GitHub API access for workflow status |
 | `GERRIT_REPORTS_PAT_TOKEN` | ✅ Yes | Publishing reports to gerrit-reports repo |
 | `LF_GERRIT_INFO_MASTER_SSH_KEY` | ⚠️ Optional | SSH access to info-master (HTTPS fallback available) |
+<!-- markdownlint-enable MD013 -->
 
 ## Auto-Detection
 
 GitHub organization is automatically derived from Gerrit hostname:
 
+<!-- markdownlint-disable MD013 -->
 | Gerrit Host | Auto-Detected Org | Correct? |
 |-------------|-------------------|----------|
 | `gerrit.onap.org` | `onap` | ✅ Yes |
@@ -42,6 +52,7 @@ GitHub organization is automatically derived from Gerrit hostname:
 | `git.opendaylight.org` | `opendaylight` | ✅ Yes |
 | `gerrit.fd.io` | `fd` | ❌ No (should be `fdio`) |
 | `gerrit.automotivelinux.org` | `automotivelinux` | ❌ No (should be `automotive-grade-linux`) |
+<!-- markdownlint-enable MD013 -->
 
 ## Override Auto-Detection
 
@@ -60,7 +71,8 @@ For projects where auto-detection is wrong, add explicit `github` field:
 When you run the workflow, check GITHUB_STEP_SUMMARY for:
 
 ### ✅ All Good
-```
+
+```text
 🔐 Secrets Validation
 - ✅ CLASSIC_READ_ONLY_PAT_TOKEN: Present
 - ✅ GERRIT_REPORTS_PAT_TOKEN: Present
@@ -74,7 +86,8 @@ Status: ✅ GitHub API integration fully configured
 ```
 
 ### ⚠️ Using Auto-Detection
-```
+
+```text
 🔧 GitHub API Integration Status
 - Enabled: ✅ Yes
 - Token: ✅ Present
@@ -83,7 +96,8 @@ Status: ⚠️ GitHub API will attempt auto-detection (check logs)
 ```
 
 ### ❌ Missing Prerequisites
-```
+
+```text
 🔐 Secrets Validation
 - ❌ CLASSIC_READ_ONLY_PAT_TOKEN: MISSING
 ```
@@ -91,31 +105,36 @@ Status: ⚠️ GitHub API will attempt auto-detection (check logs)
 ## Runtime Messages
 
 ### Success
-```
+
+```text
 > ✅ GitHub organization derived successfully: `onap` for repository `aai-babel`
 ```
 
 ### Failure
-```
+
+```text
 > ❌ GitHub API query failed using derived organization `onap` for `aai-babel`
 > Error: 404 Not Found
-> 
+>
 > Add explicit `github` mapping to PROJECTS_JSON to override auto-detection
 ```
 
 ## Troubleshooting
 
 ### No GitHub API Statistics in Summary?
+
 1. Check secrets validation - is CLASSIC_READ_ONLY_PAT_TOKEN set?
 2. Check for auto-detection failure messages
 3. Add explicit `github` field to PROJECTS_JSON
 
 ### 404 Errors?
+
 - GitHub org name may not match
 - Repository may not exist on GitHub
 - Add explicit `github` mapping
 
 ### No Workflow Status Colors in Report?
+
 - Check GITHUB_STEP_SUMMARY for GitHub API status
 - Verify token has `repo` and `workflow` scopes
 - Check for error messages in workflow logs
@@ -123,6 +142,7 @@ Status: ⚠️ GitHub API will attempt auto-detection (check logs)
 ## Common Patterns
 
 ### Projects with Standard Naming
+
 ```json
 {
   "project": "ONAP",
@@ -132,6 +152,7 @@ Status: ⚠️ GitHub API will attempt auto-detection (check logs)
 ```
 
 ### Projects with Non-Standard Naming
+
 ```json
 {
   "project": "FDio",
@@ -141,6 +162,7 @@ Status: ⚠️ GitHub API will attempt auto-detection (check logs)
 ```
 
 ### Projects Without GitHub Presence
+
 ```json
 {
   "project": "LF Broadband",

@@ -1867,7 +1867,7 @@ class GitDataCollector:
 
     def _get_jenkins_jobs_for_repo(self, repo_name: str) -> list[dict[str, Any]]:
         """Get Jenkins jobs for a specific repository with duplicate prevention.
-        
+
         Thread-safe: uses global lock to protect allocated_jenkins_jobs mutation.
         """
         if not self.jenkins_client or not self._jenkins_initialized:
@@ -1906,7 +1906,7 @@ class GitDataCollector:
 
     def reset_jenkins_allocation_state(self) -> None:
         """Reset Jenkins job allocation state for a fresh start.
-        
+
         Thread-safe: uses global lock.
         """
         with _jenkins_allocation_lock:
@@ -1917,7 +1917,7 @@ class GitDataCollector:
 
     def get_jenkins_job_allocation_summary(self) -> dict[str, Any]:
         """Get summary of Jenkins job allocation for auditing purposes.
-        
+
         Thread-safe: uses global lock for reading allocation state.
         """
         if not self.jenkins_client or not self._jenkins_initialized:
@@ -2595,6 +2595,285 @@ class GitDataCollector:
 # =============================================================================
 
 
+class INFOYamlCollector:
+    """Collects and processes INFO.yaml data from info-master repository."""
+
+    def __init__(
+        self,
+        config: dict[str, Any],
+        time_windows: dict[str, dict[str, Any]],
+        logger: logging.Logger,
+    ) -> None:
+        self.config = config
+        self.time_windows = time_windows
+        self.logger = logger
+        self.info_master_path: Optional[Path] = None
+        self.projects_data: list[dict[str, Any]] = []
+
+        # Default time windows for committer activity coloring
+        self.activity_windows = {
+            "current": 365,  # Green - commits within last 365 days
+            "active": 1095,  # Orange - commits between 365-1095 days
+            "inactive": None,  # Red - no commits in 1095+ days
+        }
+
+        # Allow project-specific overrides from config
+        info_config = self.config.get("info_yaml", {})
+        if "activity_windows" in info_config:
+            self.activity_windows.update(info_config["activity_windows"])
+
+    def set_info_master_path(self, path: Path) -> None:
+        """Set the path to the cloned info-master repository."""
+        self.info_master_path = path
+        self.logger.info(f"INFO.yaml collector using info-master at: {path}")
+
+    def collect_all_projects(self) -> list[dict[str, Any]]:
+        """
+        Scan info-master repository and collect all INFO.yaml files.
+
+        Returns a list of project data dictionaries with parsed INFO.yaml content.
+        """
+        if not self.info_master_path or not self.info_master_path.exists():
+            self.logger.error("info-master path not set or does not exist")
+            return []
+
+        self.logger.info("Collecting INFO.yaml files from info-master repository...")
+        projects = []
+
+        # Walk through the info-master directory structure
+        for info_file in self.info_master_path.rglob("INFO.yaml"):
+            try:
+                project_data = self._parse_info_yaml(info_file)
+                if project_data:
+                    projects.append(project_data)
+            except Exception as e:
+                self.logger.error(f"Error parsing {info_file}: {e}")
+
+        self.projects_data = projects
+        self.logger.info(f"Collected {len(projects)} INFO.yaml files")
+        return projects
+
+    def _parse_info_yaml(self, yaml_file: Path) -> Optional[dict[str, Any]]:
+        """Parse a single INFO.yaml file and extract required fields."""
+        try:
+            with open(yaml_file, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+
+            if not data:
+                return None
+
+            # Extract relative path from info-master root
+            if not self.info_master_path:
+                return None
+            relative_path = yaml_file.relative_to(self.info_master_path)
+            path_parts = relative_path.parts
+
+            # Extract gerrit server (first directory component)
+            gerrit_server = path_parts[0] if len(path_parts) > 0 else "unknown"
+
+            # Extract project path (everything except the last component which is INFO.yaml)
+            project_path_parts = path_parts[:-1]  # Remove INFO.yaml
+            if len(project_path_parts) > 1:
+                project_path_parts = project_path_parts[1:]  # Remove gerrit server
+            project_path = "/".join(project_path_parts) if project_path_parts else ""
+
+            # Build project data structure
+            project_data = {
+                "project_name": data.get("project", "Unknown"),
+                "gerrit_server": gerrit_server,
+                "project_path": project_path,
+                "full_path": str(relative_path.parent),
+                "creation_date": data.get("project_creation_date", "Unknown"),
+                "lifecycle_state": data.get("lifecycle_state", "Unknown"),
+                "project_lead": self._extract_person(data.get("project_lead")),
+                "committers": self._extract_committers(data.get("committers", [])),
+                "issue_tracking": data.get("issue_tracking", {}),
+                "repositories": data.get("repositories", []),
+                "yaml_file_path": str(yaml_file),
+            }
+
+            return project_data
+
+        except Exception as e:
+            self.logger.error(f"Error parsing INFO.yaml at {yaml_file}: {e}")
+            return None
+
+    def _extract_person(self, person_data: Any) -> dict[str, str]:
+        """Extract person information from YAML data."""
+        if not person_data or not isinstance(person_data, dict):
+            return {
+                "name": "Unknown",
+                "email": "",
+                "company": "",
+                "id": "",
+            }
+
+        return {
+            "name": person_data.get("name", "Unknown"),
+            "email": person_data.get("email", ""),
+            "company": person_data.get("company", ""),
+            "id": person_data.get("id", ""),
+        }
+
+    def _extract_committers(self, committers_data: Any) -> list[dict[str, str]]:
+        """Extract committers list from YAML data."""
+        if not committers_data or not isinstance(committers_data, list):
+            return []
+
+        committers = []
+        for committer in committers_data:
+            if isinstance(committer, dict):
+                committers.append(self._extract_person(committer))
+
+        return committers
+
+    def validate_issue_tracker_url(self, url: str) -> tuple[bool, str]:
+        """
+        Validate that the issue tracker URL is accessible.
+
+        Returns (is_valid, error_message)
+        """
+        if not url:
+            return (False, "No URL provided")
+
+        try:
+            # Use httpx to check URL (follows redirects)
+            with httpx.Client(follow_redirects=True, timeout=10.0) as client:
+                response = client.head(url)
+                if response.status_code < 400:
+                    return (True, "")
+                else:
+                    return (False, f"HTTP {response.status_code}")
+        except httpx.ConnectError:
+            return (False, "Connection failed")
+        except httpx.TimeoutException:
+            return (False, "Timeout")
+        except Exception as e:
+            return (False, str(e))
+
+    def enrich_projects_with_git_data(
+        self, git_metrics: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """
+        Enrich INFO.yaml project data with git commit activity for committers.
+
+        Matches projects to repositories and determines committer activity status.
+        """
+        self.logger.info("Enriching INFO.yaml projects with git commit data...")
+
+        # Build a lookup map from repository metrics
+        repo_lookup: dict[str, dict[str, Any]] = {}
+        for metrics in git_metrics:
+            repo_info = metrics.get("repository", {})
+            gerrit_project = repo_info.get("gerrit_project", "")
+            if gerrit_project:
+                repo_lookup[gerrit_project] = metrics
+
+        # Enrich each project
+        enriched_projects = []
+        for project in self.projects_data:
+            enriched_project = project.copy()
+
+            # Validate issue tracker URL
+            issue_tracking = project.get("issue_tracking", {})
+            url = issue_tracking.get("url", "")
+            if url:
+                is_valid, error_msg = self.validate_issue_tracker_url(url)
+                enriched_project["issue_tracker_valid"] = is_valid
+                enriched_project["issue_tracker_error"] = error_msg
+            else:
+                enriched_project["issue_tracker_valid"] = False
+                enriched_project["issue_tracker_error"] = "No URL"
+
+            # Try to find matching repository
+            project_path = project.get("project_path", "")
+            matched_repo = None
+
+            # Try exact match first
+            if project_path in repo_lookup:
+                matched_repo = repo_lookup[project_path]
+            else:
+                # Try matching against repository names in the project's repositories list
+                for repo_name in project.get("repositories", []):
+                    if repo_name in repo_lookup:
+                        matched_repo = repo_lookup[repo_name]
+                        break
+
+            # Enrich committers with activity data
+            if matched_repo:
+                enriched_project["committers"] = self._enrich_committers_activity(
+                    project.get("committers", []),
+                    matched_repo.get("authors", {}),
+                )
+                enriched_project["has_git_data"] = True
+            else:
+                # No git data found - mark committers as unknown activity
+                enriched_project["committers"] = [
+                    {**c, "activity_status": "unknown", "activity_color": "gray"}
+                    for c in project.get("committers", [])
+                ]
+                enriched_project["has_git_data"] = False
+
+            enriched_projects.append(enriched_project)
+
+        return enriched_projects
+
+    def _enrich_committers_activity(
+        self,
+        committers: list[dict[str, str]],
+        authors_data: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """
+        Determine activity status for each committer based on git commit data.
+
+        Returns committers list with added 'activity_status' and 'activity_color'.
+        """
+        enriched = []
+
+        for committer in committers:
+            enriched_committer = committer.copy()
+            email = committer.get("email", "").lower()
+            name = committer.get("name", "")
+
+            # Try to find author by email or name
+            author_metrics = None
+            if email and email in authors_data:
+                author_metrics = authors_data[email]
+            else:
+                # Fallback: try to match by name (less reliable)
+                for author_email, metrics in authors_data.items():
+                    if metrics.get("name", "").lower() == name.lower():
+                        author_metrics = metrics
+                        break
+
+            if author_metrics:
+                # Determine activity based on last commit
+                last_commit_days = author_metrics.get("days_since_last_commit")
+
+                if last_commit_days is not None:
+                    if last_commit_days <= self.activity_windows["current"]:
+                        status = "current"
+                        color = "green"
+                    elif last_commit_days <= self.activity_windows["active"]:
+                        status = "active"
+                        color = "orange"
+                    else:
+                        status = "inactive"
+                        color = "red"
+                else:
+                    status = "unknown"
+                    color = "gray"
+            else:
+                status = "unknown"
+                color = "gray"
+
+            enriched_committer["activity_status"] = status
+            enriched_committer["activity_color"] = color
+            enriched.append(enriched_committer)
+
+        return enriched
+
+
 class FeatureRegistry:
     """Registry for repository feature detection functions."""
 
@@ -2602,14 +2881,14 @@ class FeatureRegistry:
         self.config = config
         self.logger = logger
         self.checks: dict[str, Any] = {}
-        
+
         # Get GitHub organization from config (already determined centrally in main())
         self.github_org = self.config.get("github", "")
         self.github_org_source = self.config.get("_github_org_source", "not_configured")
-        
+
         if self.github_org:
             self.logger.debug(f"GitHub organization: '{self.github_org}' (source: {self.github_org_source})")
-        
+
         self._register_default_checks()
 
     def register(self, feature_name: str, check_function):
@@ -3118,7 +3397,7 @@ class FeatureRegistry:
                     # Merge GitHub API data with static analysis
                     result["github_api_data"] = github_status
                     result["has_runtime_status"] = True
-                    
+
                     self.logger.debug(
                         f"Retrieved GitHub workflow status for {owner}/{repo_name}"
                     )
@@ -3341,11 +3620,11 @@ class FeatureRegistry:
 
     def _extract_github_repo_info(self, repo_path: Path, github_org: str = "") -> tuple[str, str]:
         """Extract GitHub owner and repo name from git remote or configuration.
-        
+
         Args:
             repo_path: Path to the repository
             github_org: GitHub organization name from configuration (for Gerrit mirrors)
-            
+
         Returns:
             Tuple of (owner, repo_name)
         """
@@ -3384,14 +3663,14 @@ class FeatureRegistry:
 
     def _infer_github_info_from_path(self, repo_path: Path, github_org: str = "") -> tuple[str, str]:
         """Infer GitHub owner/repo from repository path for mirrored repos.
-        
+
         For Gerrit repos mirrored to GitHub, the path structure is typically:
         ./gerrit.example.org/repo-name -> github_org/repo-name
-        
+
         Args:
             repo_path: Path to the repository
             github_org: GitHub organization name from configuration
-            
+
         Returns:
             Tuple of (owner, repo_name)
         """
@@ -3401,19 +3680,19 @@ class FeatureRegistry:
                     f"Cannot infer GitHub info for {repo_path.name}: github_org not provided"
                 )
                 return "", ""
-            
+
             # Get just the repository name from the path
             # For paths like ./gerrit.onap.org/aai/babel, we want "aai-babel"
             # For paths like ./gerrit.onap.org/simple-repo, we want "simple-repo"
             path_parts = repo_path.parts
-            
+
             # Find the Gerrit host in the path (e.g., "gerrit.onap.org")
             gerrit_host_index = -1
             for i, part in enumerate(path_parts):
                 if "gerrit" in part.lower() or "git" in part.lower():
                     gerrit_host_index = i
                     break
-            
+
             if gerrit_host_index >= 0 and gerrit_host_index < len(path_parts) - 1:
                 # Get all path components after the gerrit host
                 repo_parts = path_parts[gerrit_host_index + 1:]
@@ -3425,7 +3704,7 @@ class FeatureRegistry:
                         f"Inferred GitHub repo: {github_org}/{repo_name} from path {repo_path}"
                     )
                     return github_org, repo_name
-            
+
             # Fallback: use just the repo name
             repo_name = repo_path.name
             self.logger.debug(
@@ -3933,9 +4212,15 @@ class DataAggregator:
 class ReportRenderer:
     """Handles rendering of aggregated data into various output formats."""
 
-    def __init__(self, config: dict[str, Any], logger: logging.Logger) -> None:
+    def __init__(
+        self,
+        config: dict[str, Any],
+        logger: logging.Logger,
+        info_yaml_projects: Optional[list[dict[str, Any]]] = None,
+    ) -> None:
         self.config = config
         self.logger = logger
+        self.info_yaml_projects = info_yaml_projects or []
 
     def render_json_report(self, data: dict[str, Any], output_path: Path) -> None:
         """
@@ -3981,7 +4266,7 @@ class ReportRenderer:
         Package all report outputs into a ZIP file.
 
         Creates a ZIP containing JSON, Markdown, HTML, and configuration files.
-        
+
         This now delegates to create_report_bundle for unified implementation.
         """
         return create_report_bundle(output_dir, project, self.logger)
@@ -4025,6 +4310,10 @@ class ReportRenderer:
 
         # Orphaned Jenkins jobs from archived projects
         sections.append(self._generate_orphaned_jobs_section(data))
+
+        # Committer INFO.yaml Report
+        if self.info_yaml_projects:
+            sections.append(self._generate_info_yaml_committers_section())
 
         # Footer
         sections.append("Generated with ❤️ by Release Engineering")
@@ -4798,6 +5087,109 @@ class ReportRenderer:
         lines.extend(
             ["", f"**Total:** {len(repos_with_cicd)} repositories with CI/CD jobs"]
         )
+        return "\n".join(lines)
+
+    def _generate_info_yaml_committers_section(self) -> str:
+        """Generate Committer INFO.yaml Report section."""
+        if not self.info_yaml_projects:
+            return ""
+
+        lines = ["## 📋 Committer INFO.yaml Report"]
+        lines.append("")
+        lines.append(
+            "This report shows project information from INFO.yaml files, including lifecycle state, "
+            "project leads, and committer activity status."
+        )
+        lines.append("")
+
+        # Sort projects by gerrit server, then by project name
+        sorted_projects = sorted(
+            self.info_yaml_projects,
+            key=lambda p: (p.get("gerrit_server", ""), p.get("project_name", ""))
+        )
+
+        # Group by gerrit server
+        current_server = None
+        table_started = False
+
+        for project in sorted_projects:
+            gerrit_server = project.get("gerrit_server", "unknown")
+
+            # Add server header if changed
+            if gerrit_server != current_server:
+                # Close previous table if exists
+                if table_started:
+                    lines.append("")
+                    table_started = False
+
+                if current_server is not None:
+                    lines.append("")
+
+                lines.append(f"### {gerrit_server}")
+                lines.append("")
+                current_server = gerrit_server
+
+                # Start new table with header
+                lines.append("| Project | Creation Date | Lifecycle State | Project Lead | Committers |")
+                lines.append("|---------|---------------|-----------------|--------------|------------|")
+                table_started = True
+
+            # Prepare project name with optional issue tracker link
+            project_name = project.get("project_name", "Unknown")
+            issue_tracking = project.get("issue_tracking", {})
+            issue_url = issue_tracking.get("url", "")
+            is_valid = project.get("issue_tracker_valid", False)
+
+            if issue_url:
+                if is_valid:
+                    # Valid URL - make project name a hyperlink
+                    project_name_display = f'<a href="{issue_url}" target="_blank">{project_name}</a>'
+                else:
+                    # Broken URL - color red with tooltip
+                    error_msg = project.get("issue_tracker_error", "Unknown error")
+                    project_name_display = (
+                        f'<span style="color: red;" title="⚠️ Broken project issue-tracker link: {error_msg}">'
+                        f'{project_name}</span>'
+                    )
+            else:
+                project_name_display = project_name
+
+            # Get project metadata
+            creation_date = project.get("creation_date", "Unknown")
+            lifecycle_state = project.get("lifecycle_state", "Unknown")
+            project_lead = project.get("project_lead", {})
+            lead_name = project_lead.get("name", "Unknown")
+
+            # Build committers list with activity coloring
+            committers = project.get("committers", [])
+            committers_html = []
+            for committer in committers:
+                name = committer.get("name", "Unknown")
+                color = committer.get("activity_color", "gray")
+                status = committer.get("activity_status", "unknown")
+
+                # Create color-coded committer name
+                if color == "green":
+                    colored_name = f'<span style="color: green;" title="✅ Current - commits within last 365 days">{name}</span>'
+                elif color == "orange":
+                    colored_name = f'<span style="color: orange;" title="☑️ Active - commits between 365-1095 days">{name}</span>'
+                elif color == "red":
+                    colored_name = f'<span style="color: red;" title="🛑 Inactive - no commits in 1095+ days">{name}</span>'
+                else:
+                    colored_name = f'<span style="color: gray;" title="Unknown activity status">{name}</span>'
+
+                committers_html.append(colored_name)
+
+            committers_display = "<br>".join(committers_html) if committers_html else "None"
+
+            # Add table row
+            lines.append(
+                f"| {project_name_display} | {creation_date} | {lifecycle_state} | "
+                f"{lead_name} | {committers_display} |"
+            )
+
+        lines.append("")
+        lines.append(f"**Total Projects:** {len(self.info_yaml_projects)}")
         return "\n".join(lines)
 
     def _generate_contributors_section(self, data: dict[str, Any]) -> str:
@@ -5619,14 +6011,14 @@ class ReportRenderer:
 
     def _format_number(self, num: Union[int, float], signed: bool = False) -> str:
         """Format number with K/M/B abbreviation.
-        
+
         Delegates to unified format_number utility.
         """
         return format_number(num, signed=signed)
 
     def _format_age(self, days: int) -> str:
         """Format age in days to actual date.
-        
+
         Delegates to unified format_age utility.
         """
         return format_age(days)
@@ -5679,13 +6071,13 @@ UNKNOWN_AGE = 999999
 
 def format_number(value: Union[int, float], signed: bool = False) -> str:
     """Format numbers with K/M/B abbreviation.
-    
+
     Unified formatting function used throughout the application.
-    
+
     Args:
         value: Number to format
         signed: If True, add + prefix for positive numbers
-        
+
     Returns:
         Formatted string with abbreviation (K/M/B) for large numbers
     """
@@ -5716,12 +6108,12 @@ def format_number(value: Union[int, float], signed: bool = False) -> str:
 
 def format_age(days: Optional[int]) -> str:
     """Format age in days to actual date.
-    
+
     Unified age formatting function used throughout the application.
-    
+
     Args:
         days: Number of days ago (None or UNKNOWN_AGE for unknown)
-        
+
     Returns:
         Date string in YYYY-MM-DD format, or "Unknown" for sentinel values
     """
@@ -5730,7 +6122,7 @@ def format_age(days: Optional[int]) -> str:
     # Handle unknown/sentinel values
     if days is None or days == UNKNOWN_AGE:
         return "Unknown"
-    
+
     # Handle zero or negative (treat as today)
     if days <= 0:
         return datetime.now().strftime("%Y-%m-%d")
@@ -5788,6 +6180,8 @@ class RepositoryReporter:
         self.aggregator = DataAggregator(config, logger)
         self.renderer = ReportRenderer(config, logger)
         self.info_master_temp_dir: Optional[str] = None
+        self.info_yaml_collector: Optional[INFOYamlCollector] = None
+        self.enriched_info_yaml_projects: list[dict[str, Any]] = []
 
     def _cleanup_info_master_repo(self) -> None:
         """Clean up the temporary info-master repository directory."""
@@ -5807,11 +6201,35 @@ class RepositoryReporter:
 
         Returns the path to the cloned repository in a temporary directory,
         or None if cloning failed.
+
+        If info_yaml.local_path is configured, uses that instead of cloning.
         """
+        # Check if local path is configured
+        info_config = self.config.get("info_yaml", {})
+        local_path = info_config.get("local_path")
+
+        if local_path:
+            # Use existing local path instead of cloning
+            info_master_path = Path(local_path)
+            if info_master_path.exists() and (info_master_path / ".git").exists():
+                self.logger.info(f"Using existing info-master repository at: {info_master_path}")
+                api_stats.record_info_master(True)
+                # Don't set temp_dir since we're not managing this directory
+                return info_master_path
+            else:
+                self.logger.error(f"Configured info-master path does not exist or is not a git repository: {local_path}")
+                api_stats.record_info_master(False, "Local path not found or not a git repo")
+                return None
+
         # Create a temporary directory for info-master
         self.info_master_temp_dir = tempfile.mkdtemp(prefix="info-master-")
         info_master_path = Path(self.info_master_temp_dir) / "info-master"
-        info_master_url = "ssh://modesevenindustrialsolutions@gerrit.linuxfoundation.org:29418/releng/info-master"
+
+        # Get clone URL from config or use default
+        info_master_url = info_config.get(
+            "clone_url",
+            "https://gerrit.linuxfoundation.org/infra/releng/info-master"
+        )
 
         self.logger.info(
             f"Cloning info-master repository to temporary location: {info_master_path}"
@@ -5848,16 +6266,6 @@ class RepositoryReporter:
         repos_path_abs = repos_path.resolve()
         self.logger.info(f"Starting repository analysis in {repos_path_abs}")
 
-        # Clone info-master repository for additional context
-        # This is cloned to a temporary directory to avoid it appearing in the report
-        info_master_path = self._clone_info_master_repo()
-        if info_master_path:
-            self.logger.info(f"Info-master repository available at: {info_master_path}")
-        else:
-            self.logger.warning(
-                "Info-master repository not available - continuing without it"
-            )
-
         # Initialize data structure
         report_data = {
             "schema_version": SCHEMA_VERSION,
@@ -5881,6 +6289,23 @@ class RepositoryReporter:
 
         # Update git collector with repos_path for relative path calculation
         self.git_collector.repos_path = repos_path_abs
+
+        # Clone info-master repository for additional context
+        # This is cloned to a temporary directory to avoid it appearing in the report
+        info_master_path = self._clone_info_master_repo()
+        if info_master_path:
+            self.logger.info(f"Info-master repository available at: {info_master_path}")
+            # Initialize INFO.yaml collector
+            self.info_yaml_collector = INFOYamlCollector(
+                self.config,
+                cast(dict[str, dict[str, Any]], report_data["time_windows"]),
+                self.logger
+            )
+            self.info_yaml_collector.set_info_master_path(info_master_path)
+        else:
+            self.logger.warning(
+                "Info-master repository not available - continuing without it"
+            )
 
         # Find all repository directories
         repo_dirs = self._discover_repositories(repos_path_abs)
@@ -5910,6 +6335,19 @@ class RepositoryReporter:
         report_data["summaries"] = self.aggregator.aggregate_global_data(
             successful_repos
         )
+
+        # Collect and enrich INFO.yaml data if available
+        if self.info_yaml_collector:
+            self.logger.info("Collecting INFO.yaml data from info-master repository...")
+            info_yaml_projects = self.info_yaml_collector.collect_all_projects()
+
+            # Enrich with git commit activity data
+            self.enriched_info_yaml_projects = self.info_yaml_collector.enrich_projects_with_git_data(
+                repo_metrics
+            )
+            self.logger.info(
+                f"Enriched {len(self.enriched_info_yaml_projects)} INFO.yaml projects with git data"
+            )
 
         # Log comprehensive Jenkins job allocation summary for auditing
         if (
@@ -5997,6 +6435,13 @@ class RepositoryReporter:
         config_path = output_dir / "config_resolved.json"
 
         generated_files = {}
+
+        # Update renderer with INFO.yaml data if available
+        if self.enriched_info_yaml_projects:
+            self.renderer.info_yaml_projects = self.enriched_info_yaml_projects
+            self.logger.info(
+                f"Passing {len(self.enriched_info_yaml_projects)} INFO.yaml projects to renderer"
+            )
 
         # Generate JSON report
         self.renderer.render_json_report(report_data, json_path)
@@ -6142,20 +6587,20 @@ class RepositoryReporter:
 
 def determine_github_org(repos_path: Path) -> tuple[str, str]:
     """Determine GitHub organization once - centralized function.
-    
+
     Priority:
     1. GITHUB_ORG environment variable (from PROJECTS_JSON matrix.github)
     2. Auto-derive from repos_path hostname
-    
+
     Args:
         repos_path: Path to repositories directory
-        
+
     Returns:
         Tuple of (github_org, source) where source is:
         - "environment_variable" if from GITHUB_ORG env var (PROJECTS_JSON)
         - "auto_derived" if derived from hostname
         - "" if not found
-        
+
     Note:
         The config parameter was removed as it was unused.
         GitHub org is now purely derived from environment or path.
@@ -6168,7 +6613,7 @@ def determine_github_org(repos_path: Path) -> tuple[str, str]:
             return github_org, "environment_variable"
         else:
             logging.warning(f"Invalid GITHUB_ORG value '{github_org}' - must be alphanumeric with hyphens")
-    
+
     # Auto-derive from repos_path hostname
     # Examples: ./gerrit.onap.org -> onap, ./git.opendaylight.org -> opendaylight
     for part in repos_path.parts:
@@ -6180,7 +6625,7 @@ def determine_github_org(repos_path: Path) -> tuple[str, str]:
             if len(parts) >= 3:
                 github_org = parts[1]
                 return github_org, "auto_derived"
-    
+
     # Not found
     return "", ""
 
@@ -6274,24 +6719,24 @@ def write_config_to_step_summary(config: dict[str, Any], project: str) -> None:
             f.write(
                 f"- **Config Digest:** `{compute_config_digest(config)[:12]}...`\n\n"
             )
-            
+
             # Validate GitHub API prerequisites
             github_api_enabled = config.get("extensions", {}).get("github_api", {}).get("enabled", False)
             github_token = config.get("extensions", {}).get("github_api", {}).get("token") or os.environ.get("CLASSIC_READ_ONLY_PAT_TOKEN")
             github_org = config.get("github", "")
             github_org_source = config.get("_github_org_source", "")
-            
+
             f.write("### 🔧 GitHub API Integration Status\n\n")
-            
+
             if github_api_enabled:
                 f.write("- **Enabled:** ✅ Yes\n")
-                
+
                 # Check for token
                 if github_token:
                     f.write("- **Token:** ✅ Present (CLASSIC_READ_ONLY_PAT_TOKEN)\n")
                 else:
                     f.write("- **Token:** ❌ **MISSING** - Set `CLASSIC_READ_ONLY_PAT_TOKEN` secret\n")
-                
+
                 # Check for github org and show source
                 if github_org:
                     if github_org_source == "environment_variable":
@@ -6309,7 +6754,7 @@ def write_config_to_step_summary(config: dict[str, Any], project: str) -> None:
                     f.write(f"> Add `github` field to the `{project}` entry in `PROJECTS_JSON` variable.\n")
                     f.write("> \n")
                     f.write("> **Impact:** GitHub workflow status will NOT be queried.\n\n")
-                
+
                 # Overall status
                 if github_token and github_org:
                     f.write("\n**Status:** ✅ GitHub API integration fully configured\n\n")
@@ -6317,7 +6762,7 @@ def write_config_to_step_summary(config: dict[str, Any], project: str) -> None:
                     f.write("\n**Status:** ❌ GitHub API integration **DISABLED** due to missing prerequisites\n\n")
             else:
                 f.write("- **Enabled:** ❌ No (disabled in configuration)\n\n")
-                
+
     except Exception as e:
         # Log but don't fail - step summary is nice-to-have, not critical
         logging.debug(f"Could not write configuration to GITHUB_STEP_SUMMARY: {e}")
@@ -6338,12 +6783,12 @@ def main() -> int:
 
         # Determine GitHub organization once - centralized
         github_org, github_org_source = determine_github_org(args.repos_path)
-        
+
         if github_org:
             # Store in config for all components to use
             config["github"] = github_org
             config["_github_org_source"] = github_org_source
-            
+
             # Log what we determined
             if github_org_source == "auto_derived":
                 print(f"ℹ️  Derived GitHub organization '{github_org}' from repository path", file=sys.stderr)
