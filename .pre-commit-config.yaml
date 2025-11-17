@@ -51,7 +51,7 @@ repos:
         types: [yaml]
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: aad66557af3b56ba6d4d69cd1b6cba87cef50cbb  # frozen: v0.14.3
+    rev: 488940d9de1b658fac229e34c521d75a6ea476f2  # frozen: v0.14.5
     hooks:
       - id: ruff
         files: ^(scripts|tests|custom_components)/.+\.py$
@@ -106,7 +106,7 @@ repos:
         args: [lint, .]
 
   - repo: https://github.com/python-jsonschema/check-jsonschema
-    rev: 83b816d020105076daac266dbf6bfed199a2da93  # frozen: 0.34.1
+    rev: 16a6ad2fead09286ee6eb6b0a3fab55655a6c22a  # frozen: 0.35.0
     hooks:
       - id: check-github-actions
       - id: check-github-workflows
